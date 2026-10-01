@@ -1,0 +1,59 @@
+ÉVALUATION DU MODÈLE DE PRÉVISION
+======================================================================
+
+Période TEST : 2024-06-20 -> 2026-06-29
+
+Variables utilisées par le Random Forest :
+  - consommation_j7
+  - consommation_j1an
+  - heure
+  - jour_semaine
+  - mois
+  - weekend
+
+La prévision RTE prevision_j1 est utilisée uniquement comme benchmark externe.
+Elle n'est pas utilisée comme variable d'entrée du Random Forest.
+
+MÉTRIQUES HORAIRES
+----------------------------------------------------------------------
+                        modele  nombre_heures      MAE_MW     RMSE_MW
+      prediction_random_forest          17616 2996.611661 4203.457484
+                  benchmark_j7          17616 3311.707936 4845.678264
+                benchmark_j1an          17616 4361.424614 5865.149102
+             benchmark_moyenne          17616 3229.732715 4423.403247
+benchmark_dernier_jour_complet          17614 3951.510900 5202.702908
+             prediction_rte_j1          17614 1279.609004 1600.881478
+
+MÉTRIQUES JOURNALIÈRES
+----------------------------------------------------------------------
+                        modele  nombre_jours  MAE_total_MWh  RMSE_total_MWh  biais_total_MWh
+      prediction_random_forest           734   67558.391470    94280.475776     20188.940194
+                  benchmark_j7           734   76115.352861   111301.412909     -1748.854223
+                benchmark_j1an           734   98547.013624   129973.825259    -12444.809264
+             benchmark_moyenne           734   73557.527929   100224.028400     -7096.831744
+benchmark_dernier_jour_complet           734   88295.615804   109169.320588     -1323.152589
+             prediction_rte_j1           734   25647.791553    30555.391429    -23015.914169
+
+MÉTRIQUES PICS
+----------------------------------------------------------------------
+                        modele  nombre_jours  MAE_pic_MW  biais_pic_MW  ecart_moyen_heure_pic  taux_heure_pic_correct
+benchmark_dernier_jour_complet           732 4141.745902    -34.431694               2.435792               64.754098
+                benchmark_j1an           734 4525.170300   -539.840599               2.160763               69.209809
+                  benchmark_j7           734 3395.456403    -74.129428               1.991826               72.070845
+             benchmark_moyenne           734 3285.104905   -478.651226               1.934605               72.615804
+      prediction_random_forest           734 3134.004453    670.407790               2.332425               59.400545
+             prediction_rte_j1           732 1353.359290  -1082.050546               1.595628               71.721311
+
+PIRES JOURNÉES
+----------------------------------------------------------------------
+date_cible  MAE_jour_MW  RMSE_jour_MW  erreur_totale_MWh  erreur_totale_absolue_MWh
+2025-11-22 17151.572922  17209.381209     -411637.750123              411637.750123
+2025-11-23 14300.325675  14522.508827     -343207.816200              343207.816200
+2025-11-21 12612.075513  12662.400439     -302689.812316              302689.812316
+2026-01-15 12126.647385  12325.460324      291039.537233              291039.537233
+2026-02-26 11650.683630  11849.327021      279616.407114              279616.407114
+2025-02-23 11322.281808  11429.769374      271734.763383              271734.763383
+2026-01-17 11308.991069  11375.208780      271415.785661              271415.785661
+2026-01-18 11239.813509  11289.747913      269755.524223              269755.524223
+2026-02-27 11148.106667  11253.047681      267554.559999              267554.559999
+2026-02-24 11061.735624  11276.845687      265481.654968              265481.654968

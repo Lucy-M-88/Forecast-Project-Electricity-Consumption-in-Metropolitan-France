@@ -1,0 +1,22 @@
+METADONNEES DU TELECHARGEMENT éCO2mix
+=====================================
+
+Dataset ODRÉ : eco2mix-national-cons-def
+URL : https://odre.opendatasoft.com/api/explore/v2.1/catalog/datasets/eco2mix-national-cons-def/exports/csv
+Producteur : RTE
+Périmètre : France
+Unité de consommation : MW
+Pas source : demi-heure
+Nombre de lignes : 508260
+Première date : 2011-12-31 23:00:00+00:00
+Dernière date : 2026-06-30 21:45:00+00:00
+
+Colonnes conservées :
+ - perimetre
+ - nature
+ - date_heure
+ - consommation
+
+IMPORTANT :
+Ce fichier constitue uniquement l'étape de téléchargement.
+Aucun retard temporel, variable calendaire ou variable de modèle n'a été construit ici.

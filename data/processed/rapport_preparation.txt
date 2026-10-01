@@ -1,0 +1,26 @@
+RAPPORT DE PRÉPARATION DES DONNÉES
+======================================================================
+
+Principe fondamental
+--------------------
+La consommation horaire utilisée par le projet correspond EXACTEMENT à l'observation RTE située à HH:00.
+Aucune moyenne entre HH:00 et HH:30 n'est calculée.
+Aucune interpolation n'est réalisée.
+Aucune valeur artificielle n'est créée.
+
+Exemple
+-------
+07:00 -> consommation observée à 07:00
+07:30 -> non utilisée pour construire 07:00
+08:00 -> consommation observée à 08:00
+
+Statistiques
+------------
+Observations initiales : 508,260
+Observations HH:00 conservées : 127,065
+Observations HH:30 écartées : 127,065
+Doublons physiques supprimés : 0
+Consommations manquantes HH:00 : 0
+Consommations négatives : 0
+Journées complètes de 24 heures : 5,280
+Journées non complètes : 15

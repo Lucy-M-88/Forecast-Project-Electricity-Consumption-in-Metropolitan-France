@@ -1,0 +1,38 @@
+INFORMATIONS DU MODÈLE
+======================================================================
+
+Modèle : RandomForestRegressor
+Nombre d'arbres : 300
+min_samples_leaf : 2
+max_features : sqrt
+random_state : 42
+
+VARIABLES EXPLICATIVES
+- consommation_j7
+- consommation_j1an
+- heure
+- jour_semaine
+- mois
+- weekend
+
+VARIABLE CIBLE
+- consommation_cible
+
+DÉCOUPAGE
+Train : 2012-12-31 00:00:00 -> 2022-06-11 00:00:00
+Validation : 2022-06-12 00:00:00 -> 2024-06-19 00:00:00
+Test : 2024-06-20 00:00:00 -> 2026-06-29 00:00:00
+
+PERFORMANCES
+MAE validation : 3173.0765 MW
+RMSE validation : 4558.3603 MW
+MAE test : 2996.6117 MW
+RMSE test : 4203.4575 MW
+
+IMPORTANCE DES VARIABLES
+consommation_j7 : 0.473504
+consommation_j1an : 0.276237
+mois : 0.158329
+heure : 0.052924
+jour_semaine : 0.026071
+weekend : 0.012934

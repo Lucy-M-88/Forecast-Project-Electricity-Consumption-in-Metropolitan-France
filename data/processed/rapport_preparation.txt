@@ -16,11 +16,11 @@ Exemple
 
 Statistiques
 ------------
-Observations initiales : 508,260
-Observations HH:00 conservées : 127,065
-Observations HH:30 écartées : 127,065
+Observations initiales : 514,212
+Observations HH:00 conservées : 128,553
+Observations HH:30 écartées : 128,553
 Doublons physiques supprimés : 0
-Consommations manquantes HH:00 : 0
+Consommations manquantes HH:00 : 1
 Consommations négatives : 0
-Journées complètes de 24 heures : 5,280
+Journées complètes de 24 heures : 5,342
 Journées non complètes : 15

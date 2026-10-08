@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 
 """
-09_prevision_operationnelle.py
+06_prevision_operationnelle.py
 
 Objectif
 --------
@@ -27,7 +27,7 @@ IMPORTANT :
 
 Prérequis :
     - Avoir lancé 03_creation_dataset.py pour avoir l'historique
-    - Avoir lancé 05_modele_xgboost.py ET 08_ensemble_rf_xgboost.py
+    - Avoir lancé 05_modelisation.py
       pour avoir les modèles .joblib
 """
 
@@ -163,8 +163,7 @@ def verifier_prerequis():
     else:
         print(
             "  [MANQUANT] Aucun modèle trouvé.\n"
-            "  Lance d'abord 05_modele_xgboost.py puis "
-            "08_ensemble_rf_xgboost.py."
+            "  Lance d'abord 05_modelisation.py."
         )
         manquants.append("modèle .joblib")
         chemin_modele = None

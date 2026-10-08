@@ -1,26 +1,72 @@
-RAPPORT DE PRÉPARATION DES DONNÉES
+======================================================================
+RAPPORT DE PRÉPARATION DES DONNÉES éCO2mix
 ======================================================================
 
-Principe fondamental
---------------------
-La consommation horaire utilisée par le projet correspond EXACTEMENT à l'observation RTE située à HH:00.
+PRINCIPE FONDAMENTAL
+----------------------------------------------------------------------
+La consommation horaire correspond EXACTEMENT à l'observation RTE située à HH:00.
 Aucune moyenne entre HH:00 et HH:30 n'est calculée.
 Aucune interpolation n'est réalisée.
 Aucune valeur artificielle n'est créée.
 
-Exemple
--------
-07:00 -> consommation observée à 07:00
-07:30 -> non utilisée pour construire 07:00
-08:00 -> consommation observée à 08:00
+======================================================================
+ÉTAPE 1 : PRÉPARATION DES DONNÉES CONSOLIDÉES
+======================================================================
+
+Entrée
+----------------------------------------------------------------------
+  eco2mix_national_brut.csv
 
 Statistiques
-------------
-Observations initiales : 514,212
-Observations HH:00 conservées : 128,553
-Observations HH:30 écartées : 128,553
-Doublons physiques supprimés : 0
-Consommations manquantes HH:00 : 1
-Consommations négatives : 0
-Journées complètes de 24 heures : 5,342
-Journées non complètes : 15
+----------------------------------------------------------------------
+Observations initiales          : 514,212
+Observations à HH:00 conservées : 128,553
+Observations à HH:30 écartées   : 128,553
+Doublons physiques supprimés    : 0
+Consommations manquantes à HH:00: 1
+Consommations négatives         : 0
+Journées complètes (24h)        : 5,342
+Journées incomplètes            : 15
+
+Sortie
+----------------------------------------------------------------------
+  eco2mix_national_horaire.csv
+
+======================================================================
+ÉTAPE 2 : FUSION AVEC LES DONNÉES TEMPS RÉEL
+======================================================================
+
+Entrée
+----------------------------------------------------------------------
+  eco2mix_national_temps_reel.csv
+
+Résultat de la fusion
+----------------------------------------------------------------------
+Lignes consolidées              : 128,553
+Lignes temps réel               : 905
+Lignes temps réel conservées    : 905
+Total après fusion              : 129,458
+Nombre de jours                 : 5,395
+Jours avec 24 heures            : 5,379
+
+Stratégie
+----------------------------------------------------------------------
+En cas de conflit sur un timestamp UTC, les données
+consolidées sont prioritaires car plus fiables.
+Les données temps réel ne comblent que les jours
+absents du consolidé.
+
+Sortie
+----------------------------------------------------------------------
+  eco2mix_national_horaire_fusionne.csv
+
+======================================================================
+PÉRIODE FINALE
+======================================================================
+
+Nombre de lignes totales : 129,458
+Nombre de jours          : 5,395
+
+======================================================================
+FIN DU RAPPORT
+======================================================================

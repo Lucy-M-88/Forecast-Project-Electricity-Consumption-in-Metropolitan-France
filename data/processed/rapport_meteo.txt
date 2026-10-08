@@ -1,0 +1,64 @@
+======================================================================
+RAPPORT DE PRÉPARATION DE LA MÉTÉO NATIONALE
+======================================================================
+
+======================================================================
+ÉTAPE 1 : RÉDUCTION DES FICHIERS MÉTÉO-FRANCE
+======================================================================
+
+Dossier d'entrée : meteofrance/
+Dossier de sortie : meteofrance_reduit/
+Date minimale : 20100101
+Seuil de remplissage : 80%
+
+Fichiers traités : 23
+Fichiers totaux : 46
+Taille du dossier réduit : 187.9 Mo
+
+======================================================================
+ÉTAPE 2 : AGRÉGATION NATIONALE
+======================================================================
+
+Sources
+----------------------------------------------------------------------
+  Dossier : meteofrance_reduit/
+  Fichiers : 23
+  Départements retenus : 22
+
+Agrégation
+----------------------------------------------------------------------
+  1. Filtrage des codes qualité (garder 0, 1, 9)
+  2. Agrégation intra-département (moyenne des stations)
+  3. Agrégation nationale pondérée par population (INSEE)
+
+Résultat
+----------------------------------------------------------------------
+Jours uniques : 6,119
+Lignes finales : 6,119
+Colonnes finales : 32
+Première date : 2010-01-01 00:00:00
+Dernière date : 2026-10-02 00:00:00
+
+Indicateurs créés
+----------------------------------------------------------------------
+  - Degrés-jours de chauffage (HDD)
+  - Degrés-jours de climatisation (CDD)
+  - Tendances (delta_TM_J1, delta_TM_J2, etc.)
+  - Moyennes glissantes (TM_3j, TM_7j, HDD_3j, HDD_7j)
+  - Précipitations cumulées (RR_3j, RR_7j)
+  - Indicateurs binaires (a_plu, gel, vent_fort, etc.)
+
+Valeurs manquantes par colonne
+----------------------------------------------------------------------
+  delta_TM_J1 : 1 (0.0 %)
+  delta_TM_J2 : 2 (0.0 %)
+  delta_HDD_J1 : 1 (0.0 %)
+  delta_HDD_J2 : 2 (0.0 %)
+
+Sortie
+----------------------------------------------------------------------
+  meteo_france_nationale_journaliere.csv
+
+======================================================================
+FIN DU RAPPORT
+======================================================================

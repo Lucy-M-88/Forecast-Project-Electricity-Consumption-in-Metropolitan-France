@@ -466,9 +466,7 @@ def est_ferie(date):
 # 1. PARAMÈTRES
 # ============================================================
 
-INPUT_FILE = Path(
-    "data/processed/eco2mix_national_horaire.csv"
-)
+INPUT_FILE = Path("data/processed/eco2mix_national_horaire_fusionne.csv")
 
 OUTPUT_FILE = Path(
     "data/processed/dataset_prevision.csv"

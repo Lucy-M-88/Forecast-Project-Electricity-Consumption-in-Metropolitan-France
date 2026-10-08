@@ -1,0 +1,55 @@
+RAPPORT MODÉLISATION DES RÉSIDUS
+======================================================================
+
+MÉTHODE
+----------------------------------------------------------------------
+1. Entraînement de l'ensemble RF + XGBoost.
+2. Calcul des résidus sur le train.
+3. Entraînement d'un second XGBoost sur les résidus.
+4. Optimisation d'un facteur de correction lambda sur la validation.
+5. Prédiction finale : y = y_base + lambda * r_pred.
+
+Pondération de l'ensemble : alpha = 0.2
+Lambda optimal : 1.0
+
+RÉSIDUS SUR LE TRAIN
+----------------------------------------------------------------------
+  Moyenne : 0.10 MW
+  Écart-type : 1202.62 MW
+
+RÉSULTATS SUR VALIDATION
+----------------------------------------------------------------------
+ lambda         MAE        RMSE       biais        jeu
+    0.0 1989.977321 2660.377369 1515.795186 validation
+    0.1 1989.592050 2659.972238 1516.832989 validation
+    0.2 1989.233860 2659.605582 1517.870793 validation
+    0.3 1988.901783 2659.277418 1518.908597 validation
+    0.4 1988.598112 2658.987760 1519.946400 validation
+    0.5 1988.332698 2658.736621 1520.984204 validation
+    0.6 1988.090644 2658.524010 1522.022008 validation
+    0.7 1987.882832 2658.349938 1523.059811 validation
+    0.8 1987.706410 2658.214412 1524.097615 validation
+    0.9 1987.553258 2658.117438 1525.135418 validation
+    1.0 1987.424309 2658.059020 1526.173222 validation
+
+RÉSULTATS SUR TEST
+----------------------------------------------------------------------
+ lambda         MAE        RMSE      biais  jeu
+    0.0 1536.282775 2083.753568 732.753496 test
+    0.1 1535.393018 2082.617961 733.263666 test
+    0.2 1534.535807 2081.530131 733.773835 test
+    0.3 1533.715326 2080.490153 734.284004 test
+    0.4 1532.929160 2079.498099 734.794173 test
+    0.5 1532.188508 2078.554037 735.304342 test
+    0.6 1531.486038 2077.658033 735.814511 test
+    0.7 1530.827664 2076.810149 736.324680 test
+    0.8 1530.200878 2076.010444 736.834849 test
+    0.9 1529.604219 2075.258974 737.345018 test
+    1.0 1529.045675 2074.555791 737.855188 test
+
+COMPARAISON FINALE
+----------------------------------------------------------------------
+Ensemble base           MAE : 1536.28 MW
+Ensemble + résidus      MAE : 1529.05 MW
+Gain MAE  : +0.47 %
+Gain RMSE : +0.44 %

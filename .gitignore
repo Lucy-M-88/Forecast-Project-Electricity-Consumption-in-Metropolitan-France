@@ -1,2 +1,55 @@
+# ============================================================
+# Environnement virtuel
+# ============================================================
+.venv/
+venv/
+env/
+
+# ============================================================
+# Python
+# ============================================================
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+dist/
+*.egg-info/
+.pytest_cache/
+.ipynb_checkpoints/
+
+# ============================================================
+# Données brutes (volumineuses, retéléchargeables)
+# ============================================================
+# eco2mix RTE (~30 Mo) : retéléchargeable via 01_telechargement_eco2mix.py
+# Météo-France brut (~2,6 Go) : à télécharger manuellement
+data/raw/
+
+# ============================================================
+# Modèles entraînés (volumineux, regénérables)
+# ============================================================
+# Les .joblib font ~800 Mo chacun. Ils sont regénérables
+# en relançant 05_modele_xgboost.py, 07_optimisation_xgboost.py
+# ou 08_ensemble_rf_xgboost.py.
 models/*.joblib
-*.joblib
+models/*.pkl
+
+# ============================================================
+# Fichiers temporaires
+# ============================================================
+*.log
+*.tmp
+~$*
+
+# ============================================================
+# Système
+# ============================================================
+.DS_Store
+Thumbs.db
+
+# ============================================================
+# IDE
+# ============================================================
+.vscode/
+.idea/

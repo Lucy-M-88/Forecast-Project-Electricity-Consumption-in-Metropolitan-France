@@ -1,0 +1,82 @@
+RAPPORT DU MODÈLE XGBOOST OPTIMAL
+======================================================================
+
+HYPERPARAMÈTRES
+----------------------------------------------------------------------
+  n_estimators : 5000
+  learning_rate : 0.03
+  max_depth : 8
+  min_child_weight : 5
+  subsample : 0.6
+  colsample_bytree : 0.8
+  gamma : 0.1
+  reg_alpha : 0.1
+  reg_lambda : 1.0
+  objective : reg:squarederror
+  eval_metric : mae
+  random_state : 42
+  n_jobs : -1
+  early_stopping_rounds : 100
+
+Meilleure itération : 205
+
+FEATURES
+----------------------------------------------------------------------
+  - consommation_j7
+  - consommation_j1an
+  - heure
+  - jour_semaine
+  - mois
+  - weekend
+  - est_ferie
+  - zone_C_vacances
+  - temperature_moyenne
+  - temperature_min
+  - temperature_max
+  - amplitude_thermique
+  - HDD_moyen
+  - HDD_min
+  - HDD_max
+  - TM_3j
+  - TM_7j
+  - HDD_3j
+  - HDD_7j
+  - duree_gel_min
+
+DÉCOUPAGE
+----------------------------------------------------------------------
+TRAIN      : 2012-12-31 -> 2022-06-11
+VALIDATION : 2022-06-12 -> 2024-06-19
+TEST       : 2024-06-20 -> 2026-06-29
+
+RÉSULTATS
+----------------------------------------------------------------------
+Validation MAE  : 1990.90 MW
+Validation RMSE : 2642.48 MW
+Test MAE        : 1563.31 MW
+Test RMSE       : 2106.85 MW
+Test biais      : +800.23 MW
+
+IMPORTANCE DES VARIABLES
+----------------------------------------------------------------------
+           variable  importance
+    consommation_j7    0.415198
+            HDD_max    0.202303
+    temperature_max    0.087075
+             HDD_7j    0.069344
+             HDD_3j    0.040255
+          HDD_moyen    0.034279
+temperature_moyenne    0.023071
+            weekend    0.023042
+          est_ferie    0.019730
+  consommation_j1an    0.019417
+              TM_3j    0.019415
+       jour_semaine    0.014564
+              heure    0.010466
+               mois    0.005562
+    zone_C_vacances    0.004931
+              TM_7j    0.002485
+      duree_gel_min    0.002475
+            HDD_min    0.002448
+amplitude_thermique    0.002256
+    temperature_min    0.001684

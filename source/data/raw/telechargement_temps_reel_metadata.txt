@@ -1,0 +1,22 @@
+METADONNEES - CONSOMMATION TEMPS RÉEL éCO2mix
+==================================================
+
+Dataset ODRÉ : eco2mix-national-tr
+URL : https://odre.opendatasoft.com/api/explore/v2.1/catalog/datasets/eco2mix-national-tr/exports/csv
+Producteur : RTE
+Périmètre : France
+Unité de consommation : MW
+Nombre de lignes : 3936
+Première date : 2026-08-31 22:00:00+00:00
+Dernière date : 2026-10-11 21:45:00+00:00
+Valeurs manquantes consommation : 123
+
+Colonnes conservées :
+ - perimetre
+ - nature
+ - date_heure
+ - consommation
+
+IMPORTANT :
+Ce fichier constitue uniquement l'étape de téléchargement.
+Aucune variable de machine learning n'a été construite ici.

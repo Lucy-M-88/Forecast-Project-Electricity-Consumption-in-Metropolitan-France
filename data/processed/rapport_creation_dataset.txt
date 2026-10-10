@@ -32,9 +32,9 @@ RÈGLES IMPORTANTES
 
 STATISTIQUES
 ------------
-Origines testées : 5,395
-Origines conservées : 4,984
-Nombre total de lignes : 119,616
+Origines testées : 5,397
+Origines conservées : 4,986
+Nombre total de lignes : 119,664
 Cibles incomplètes : 18
 Lags J-7 manquants : 21
 Lags J-1 an manquants : 372

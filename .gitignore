@@ -25,6 +25,13 @@ dist/
 # eco2mix RTE (~30 Mo) : retéléchargeable via 01_telechargement_eco2mix.py
 # Météo-France brut (~2,6 Go) : à télécharger manuellement
 data/raw/
+data/processed/dataset_prevision.csv
+data/processed/eco2mix_national_horaire_fusionne.csv
+data/processed/eco2mix_national_horaire.csv
+data/processed/eco2mix_regional_horaire.csv
+data/processed/eco2mix_regional_horaire_backup.csv
+data/processed/meteo_regionale_journaliere.csv
+results/previsions_regionales.csv
 
 # ============================================================
 # Modèles entraînés (volumineux, regénérables)

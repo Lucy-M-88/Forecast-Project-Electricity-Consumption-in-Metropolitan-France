@@ -6,14 +6,10 @@ RAPPORT DE PRÉPARATION DE LA MÉTÉO NATIONALE
 ÉTAPE 1 : RÉDUCTION DES FICHIERS MÉTÉO-FRANCE
 ======================================================================
 
-Dossier d'entrée : meteofrance/
-Dossier de sortie : meteofrance_reduit/
-Date minimale : 20100101
-Seuil de remplissage : 80%
+ÉTAPE SAUTÉE : le dossier meteorfrance_reduit/ existe déjà.
 
-Fichiers traités : 23
-Fichiers totaux : 46
-Taille du dossier réduit : 187.9 Mo
+Pour forcer la réduction, supprime le dossier meteofrance_reduit/
+et relance le script.
 
 ======================================================================
 ÉTAPE 2 : AGRÉGATION NATIONALE

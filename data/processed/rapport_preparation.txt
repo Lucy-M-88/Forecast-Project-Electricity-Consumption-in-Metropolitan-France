@@ -43,9 +43,9 @@ Entrée
 Résultat de la fusion
 ----------------------------------------------------------------------
 Lignes consolidées              : 128,553
-Lignes temps réel               : 905
-Lignes temps réel conservées    : 905
-Total après fusion              : 129,458
+Lignes temps réel               : 906
+Lignes temps réel conservées    : 906
+Total après fusion              : 129,459
 Nombre de jours                 : 5,395
 Jours avec 24 heures            : 5,379
 
@@ -64,7 +64,7 @@ Sortie
 PÉRIODE FINALE
 ======================================================================
 
-Nombre de lignes totales : 129,458
+Nombre de lignes totales : 129,459
 Nombre de jours          : 5,395
 
 ======================================================================

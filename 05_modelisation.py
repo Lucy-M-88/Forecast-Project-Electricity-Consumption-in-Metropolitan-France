@@ -260,44 +260,69 @@ def joindre_meteo(df, meteo):
 
 
 def split_chronologique(df):
-    """Split chronologique 70/15/15 sur les origines."""
+    """
+    Split chronologique de référence (Split 2).
 
-    origines = (
+    Configuration retenue après évaluation comparative :
+        Train      : 2012-12-31 -> 2023-12-31 (~11 ans)
+        Validation : 2024-01-01 -> 2024-12-31 (1 an)
+        Test       : 2025-01-01 -> 2026-12-31 (~1,75 an)
+
+    Justification :
+        - Train long (11 ans) incluant les régimes pré-COVID,
+          COVID et post-COVID.
+        - Validation complète (1 an, toutes les saisons).
+        - Test long (1,75 an, 2 hivers et 2 étés), ce qui
+          donne une évaluation robuste.
+        - Meilleur compromis MAE / biais / taux pic.
+    """
+
+    df["origine_prevision"] = pd.to_datetime(
         df["origine_prevision"]
-        .drop_duplicates()
-        .sort_values()
-        .reset_index(drop=True)
     )
 
-    n = len(origines)
-    n_train = int(n * TRAIN_RATIO)
-    n_validation = int(n * VALIDATION_RATIO)
+    date_fin_train = pd.Timestamp("2023-12-31")
+    date_fin_validation = pd.Timestamp("2024-12-31")
 
-    train_origines = origines[:n_train]
-    validation_origines = origines[n_train:n_train + n_validation]
-    test_origines = origines[n_train + n_validation:]
+    train = df[
+        df["origine_prevision"] <= date_fin_train
+    ].copy()
 
-    train = df[df["origine_prevision"].isin(train_origines)].copy()
-    validation = df[df["origine_prevision"].isin(validation_origines)].copy()
-    test = df[df["origine_prevision"].isin(test_origines)].copy()
+    validation = df[
+        (df["origine_prevision"] > date_fin_train)
+        & (df["origine_prevision"] <= date_fin_validation)
+    ].copy()
 
-    print("\nDÉCOUPAGE CHRONOLOGIQUE")
+    test = df[
+        df["origine_prevision"] > date_fin_validation
+    ].copy()
+
+    print("\nDÉCOUPAGE CHRONOLOGIQUE (Split 2)")
     print("-" * 70)
     print(
-        f"TRAIN      : {len(train_origines):,} jours | "
-        f"{train_origines.min().date()} -> "
-        f"{train_origines.max().date()}"
+        f"TRAIN      : "
+        f"{train['origine_prevision'].min().date()} -> "
+        f"{train['origine_prevision'].max().date()} | "
+        f"{train['origine_prevision'].nunique():,} jours"
     )
     print(
-        f"VALIDATION : {len(validation_origines):,} jours | "
-        f"{validation_origines.min().date()} -> "
-        f"{validation_origines.max().date()}"
+        f"VALIDATION : "
+        f"{validation['origine_prevision'].min().date()} -> "
+        f"{validation['origine_prevision'].max().date()} | "
+        f"{validation['origine_prevision'].nunique():,} jours"
     )
     print(
-        f"TEST       : {len(test_origines):,} jours | "
-        f"{test_origines.min().date()} -> "
-        f"{test_origines.max().date()}"
+        f"TEST       : "
+        f"{test['origine_prevision'].min().date()} -> "
+        f"{test['origine_prevision'].max().date()} | "
+        f"{test['origine_prevision'].nunique():,} jours"
     )
+
+    # Vérifications chronologiques
+    assert train["origine_prevision"].max() < validation["origine_prevision"].min(), \
+        "Train et validation se chevauchent"
+    assert validation["origine_prevision"].max() < test["origine_prevision"].min(), \
+        "Validation et test se chevauchent"
 
     return train, validation, test
 

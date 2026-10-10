@@ -148,7 +148,6 @@ Après avoir testé **6 stratégies de découpage différentes**, le split suiva
     |   |-- 09_meteo_regionale.py
     |   |-- 11_modelisation_regionale.py
     |   |-- 12_completer_aura.py
-    |   +-- 13_diagnostic_regions.py
     |
     |-- data/
     |   |-- raw/
@@ -399,17 +398,6 @@ Complète les données manquantes d'Auvergne-Rhône-Alpes :
 - **Sécurité** : backup automatique du fichier original.
 
 **Sortie** : `data/processed/eco2mix_regional_horaire.csv` (mis à jour)
-
-### 12. `13_diagnostic_regions.py`
-
-Script de diagnostic (optionnel) qui vérifie la présence de chaque région à chaque étape du pipeline :
-
-1. `eco2mix_regional_horaire.csv` (conso régionale)
-2. `meteo_regionale_journaliere.csv` (météo régionale)
-3. `models/regional/*.joblib` (modèles entraînés)
-4. `results/previsions_regionales.csv` (prévisions finales)
-
-Pour chaque étape et chaque région, affiche la présence, le nombre de lignes et la plage temporelle.
 
 ---
 

@@ -5,47 +5,31 @@
 
 Dashboard Streamlit de prévision de consommation électrique.
 
-Affiche sur une même courbe :
-    - La prévision du modèle (ensemble RF + XGBoost)
-    - La prévision J-1 de RTE
-    - La consommation réelle observée (éCO2mix)
+Deux onglets :
+    - Courbes nationales
+    - Carte régionale interactive
 
-RÈGLE MÉTHODOLOGIQUE IMPORTANTE
--------------------------------
-Le dashboard ne couvre QUE la période de test (post-entraînement).
-Cela évite à l'utilisateur de tester le modèle sur des données
-qu'il a vues pendant l'entraînement.
-
-SOURCES DE DONNÉES
-------------------
-- Réel + prévision RTE : dataset CONSOLIDÉ (eco2mix-national-cons-def)
-  qui couvre 2010 → il y a quelques semaines.
-- Complément temps réel : dataset TEMPS RÉEL (eco2mix-national-tr)
-  qui ne couvre que les dernières semaines.
-
-Le consolidé est PRIORITAIRE (données définitives RTE).
-Le temps réel ne sert qu'à combler les jours récents absents
-du consolidé.
+Améliorations :
+    - GeoJSON robuste (fallback par nom)
+    - Debug explicite des régions chargées
+    - Carte en GW
 
 Lancement :
     streamlit run 07_dashboard.py
-
-Prérequis :
-    - Avoir lancé 05_modelisation.py (produit results/predictions.csv)
-    - Accès réseau pour éCO2mix
-
-Installation :
-    pip install streamlit plotly pandas requests
 """
 
 from pathlib import Path
 from datetime import date, timedelta
+from urllib.request import urlopen
 import io
+import json
+import unicodedata
 
 import numpy as np
 import pandas as pd
 import requests
 import streamlit as st
+import plotly.express as px
 import plotly.graph_objects as go
 
 
@@ -61,24 +45,75 @@ st.set_page_config(
 )
 
 BASE_DIR = Path(__file__).resolve().parent
-
 RESULTS_DIR = BASE_DIR / "results"
-FICHIER_PREDICTIONS = RESULTS_DIR / "predictions.csv"
 
-# API éCO2mix
+FICHIER_PREDICTIONS = RESULTS_DIR / "predictions.csv"
+FICHIER_PREVISIONS_REG = RESULTS_DIR / "previsions_regionales.csv"
+
 URL_ECO2MIX_CONSOLIDE = (
     "https://odre.opendatasoft.com/api/explore/v2.1/"
     "catalog/datasets/eco2mix-national-cons-def/exports/csv"
 )
-
 URL_ECO2MIX_TEMPS_REEL = (
     "https://odre.opendatasoft.com/api/explore/v2.1/"
     "catalog/datasets/eco2mix-national-tr/exports/csv"
 )
 
+# Deux sources GeoJSON pour robustesse
+URLS_GEOJSON = [
+    "https://raw.githubusercontent.com/gregoiredavid/france-geojson/master/regions-version-simplifiee.geojson",
+    "https://raw.githubusercontent.com/gregoiredavid/france-geojson/master/regions.geojson",
+]
+
+REGIONS_METROPOLE = {
+    "11": "Île-de-France",
+    "24": "Centre-Val de Loire",
+    "27": "Bourgogne-Franche-Comté",
+    "28": "Normandie",
+    "32": "Hauts-de-France",
+    "44": "Grand Est",
+    "52": "Pays de la Loire",
+    "53": "Bretagne",
+    "75": "Nouvelle-Aquitaine",
+    "76": "Occitanie",
+    "84": "Auvergne-Rhône-Alpes",
+    "93": "Provence-Alpes-Côte d'Azur",
+}
+
 
 # ============================================================
-# 2. PALETTE DE COULEURS
+# 2. UTILITAIRES
+# ============================================================
+
+def normalize_code(v):
+    if pd.isna(v):
+        return ""
+    s = str(v).strip()
+    if s.endswith(".0"):
+        s = s[:-2]
+    if len(s) == 1 and s.isdigit():
+        s = "0" + s
+    return s
+
+
+def normaliser_texte(s):
+    if pd.isna(s):
+        return ""
+    s = str(s).lower().strip()
+    s = unicodedata.normalize("NFKD", s)
+    s = "".join(c for c in s if not unicodedata.combining(c))
+    s = s.replace("-", " ").replace("'", " ")
+    s = " ".join(s.split())
+    return s
+
+
+NOMS_NORMALISES = {
+    normaliser_texte(v): k for k, v in REGIONS_METROPOLE.items()
+}
+
+
+# ============================================================
+# 3. PALETTE
 # ============================================================
 
 COULEURS = {
@@ -97,9 +132,17 @@ COULEUR_MODELE = COULEURS["bordeaux"]
 COULEUR_RTE = COULEURS["rose"]
 COULEUR_REEL = COULEURS["vert_doux"]
 
+CARTE_SCALE = [
+    [0.00, "#FAF6F0"],
+    [0.25, "#F4D9D0"],
+    [0.55, "#E8B4A8"],
+    [0.80, "#A85566"],
+    [1.00, "#7B2D3B"],
+]
+
 
 # ============================================================
-# 3. CSS PERSONNALISÉ
+# 4. CSS
 # ============================================================
 
 def injecter_css():
@@ -107,23 +150,15 @@ def injecter_css():
     st.markdown(
         f"""
         <style>
-        .stApp {{
-            background-color: {COULEURS['beige']};
-        }}
-
+        .stApp {{ background-color: {COULEURS['beige']}; }}
         h1, h2, h3 {{
             color: {COULEURS['bordeaux']} !important;
             font-family: 'Georgia', serif;
         }}
-
-        p, label, span, div {{
-            color: {COULEURS['texte']};
-        }}
-
+        p, label, span, div {{ color: {COULEURS['texte']}; }}
         section[data-testid="stSidebar"] {{
             background-color: {COULEURS['rose_clair']};
         }}
-
         .stButton > button {{
             background-color: {COULEURS['bordeaux']};
             color: white;
@@ -134,15 +169,12 @@ def injecter_css():
         }}
         .stButton > button:hover {{
             background-color: {COULEURS['bordeaux_clair']};
-            color: white;
         }}
-
         .stDateInput input {{
             background-color: {COULEURS['beige_fonce']};
             border: 1px solid {COULEURS['rose']};
             border-radius: 6px;
         }}
-
         div[data-testid="stMetric"] {{
             background-color: {COULEURS['beige_fonce']};
             border-left: 4px solid {COULEURS['bordeaux']};
@@ -152,7 +184,6 @@ def injecter_css():
         div[data-testid="stMetricValue"] {{
             color: {COULEURS['bordeaux']} !important;
         }}
-
         .carte-accueil {{
             background-color: {COULEURS['beige_fonce']};
             border: 1px solid {COULEURS['rose']};
@@ -160,20 +191,23 @@ def injecter_css():
             padding: 24px;
             margin: 12px 0;
         }}
-
         .bandeau-info {{
             background-color: {COULEURS['rose_clair']};
             border-left: 5px solid {COULEURS['bordeaux']};
             border-radius: 6px;
             padding: 14px 18px;
             margin: 12px 0;
-            color: {COULEURS['texte']};
             font-size: 0.95rem;
         }}
-
-        hr {{
-            border-color: {COULEURS['rose_clair']};
+        .warning-box {{
+            background-color: #FFF3E0;
+            border-left: 5px solid #E8A87C;
+            border-radius: 6px;
+            padding: 12px 16px;
+            margin: 8px 0;
+            font-size: 0.9rem;
         }}
+        hr {{ border-color: {COULEURS['rose_clair']}; }}
         </style>
         """,
         unsafe_allow_html=True,
@@ -181,380 +215,246 @@ def injecter_css():
 
 
 # ============================================================
-# 4. DÉTECTION DE LA PÉRIODE AUTORISÉE
+# 5. GÉOJSON ROBUSTE
+# ============================================================
+
+@st.cache_data(ttl=86400, show_spinner=False)
+def charger_geojson_regions():
+    """
+    Charge le GeoJSON des régions en essayant plusieurs sources
+    et en normalisant tous les codes.
+    """
+
+    for url in URLS_GEOJSON:
+
+        try:
+            with urlopen(url, timeout=30) as r:
+                gj = json.loads(r.read().decode())
+
+            features_gardees = []
+
+            for f in gj["features"]:
+
+                props = f.get("properties", {})
+
+                # Essayer plusieurs clés pour le code
+                code = None
+                for key in ["code", "code_insee", "insee", "region_code"]:
+                    if key in props:
+                        code = props[key]
+                        break
+
+                # Fallback : déduire depuis le nom
+                if code is None or normalize_code(code) not in REGIONS_METROPOLE:
+                    for key in ["nom", "name", "libelle"]:
+                        if key in props:
+                            nom_norm = normaliser_texte(props[key])
+                            if nom_norm in NOMS_NORMALISES:
+                                code = NOMS_NORMALISES[nom_norm]
+                                break
+
+                code = normalize_code(code)
+
+                if code in REGIONS_METROPOLE:
+                    f["properties"]["code"] = code
+                    features_gardees.append(f)
+
+            print(f"GeoJSON {url.split('/')[-1]} : "
+                  f"{len(features_gardees)}/{len(gj['features'])} régions")
+
+            codes_trouves = sorted({
+                f["properties"]["code"] for f in features_gardees
+            })
+
+            print(f"  Codes trouvés : {codes_trouves}")
+
+            if len(features_gardees) >= 12:
+                return {"type": "FeatureCollection", "features": features_gardees}
+
+        except Exception as e:
+            print(f"Échec {url} : {e}")
+            continue
+
+    st.error("Impossible de charger un GeoJSON contenant les 13 régions.")
+    return None
+
+
+# ============================================================
+# 6. CHARGEMENTS
 # ============================================================
 
 @st.cache_data(ttl=3600, show_spinner=False)
 def detecter_periode_autorisee():
-    """
-    Détecte la période minimale autorisée dans le dashboard.
 
-    La borne basse correspond à la première date de prévision
-    disponible dans results/predictions.csv (donc à la première
-    date du test, post-entraînement).
-    """
-
-    aujourd_hui = pd.Timestamp(date.today())
+    auj = pd.Timestamp(date.today())
 
     info = {
-        "date_min": aujourd_hui - pd.Timedelta(days=30),
-        "date_max": aujourd_hui + pd.Timedelta(days=1),
-        "source": "valeur par défaut (predictions.csv absent)",
+        "date_min": auj - pd.Timedelta(days=30),
+        "date_max": auj + pd.Timedelta(days=1),
+        "source": "valeur par défaut",
     }
 
     if FICHIER_PREDICTIONS.exists():
         try:
             df = pd.read_csv(
-                FICHIER_PREDICTIONS, sep=";", low_memory=False,
-                usecols=["date_cible"],
+                FICHIER_PREDICTIONS, sep=";",
+                usecols=["date_cible"], low_memory=False
             )
             df["date_cible"] = pd.to_datetime(df["date_cible"], errors="coerce")
             df = df.dropna(subset=["date_cible"])
-
             if len(df) > 0:
                 info["date_min"] = df["date_cible"].min().normalize()
-                info["source"] = (
-                    f"déduite de {FICHIER_PREDICTIONS.name} "
-                    f"(période de test)"
-                )
+                info["source"] = "déduite de predictions.csv (test)"
         except Exception:
             pass
 
     return info
 
 
-# ============================================================
-# 5. CHARGEMENT DES PRÉDICTIONS DU MODÈLE
-# ============================================================
-
 @st.cache_data(ttl=3600, show_spinner=False)
-def charger_predictions_modele():
-    """
-    Charge les prédictions du modèle (results/predictions.csv).
-    """
+def charger_predictions_nationales():
 
     if not FICHIER_PREDICTIONS.exists():
         return None
 
     df = pd.read_csv(FICHIER_PREDICTIONS, sep=";", low_memory=False)
-
-    if "date_cible" not in df.columns or "heure_cible" not in df.columns:
-        return None
-
     df["date_cible"] = pd.to_datetime(df["date_cible"], errors="coerce")
+    df["timestamp"] = df["date_cible"] + pd.to_timedelta(df["heure_cible"], unit="h")
+    df = df.dropna(subset=["timestamp"])
 
-    df["timestamp"] = df["date_cible"] + pd.to_timedelta(
-        df["heure_cible"], unit="h"
-    )
+    cols = ["timestamp"]
+    for c in ["consommation_reelle", "consommation_prevue"]:
+        if c in df.columns:
+            cols.append(c)
 
-    df = df.dropna(subset=["timestamp"]).copy()
-
-    colonnes = ["timestamp"]
-    if "consommation_reelle" in df.columns:
-        colonnes.append("consommation_reelle")
-    if "consommation_prevue" in df.columns:
-        colonnes.append("consommation_prevue")
-
-    df = df[colonnes].copy()
-    df = df.sort_values("timestamp").reset_index(drop=True)
-
-    return df
+    return df[cols].sort_values("timestamp").reset_index(drop=True)
 
 
 @st.cache_data(ttl=3600, show_spinner=False)
-def charger_prevision_operationnelle():
-    """
-    Charge les éventuels fichiers results/prevision_operationnelle_*.csv.
-    """
+def charger_previsions_regionales():
 
-    fichiers = sorted(RESULTS_DIR.glob("prevision_operationnelle_*.csv"))
-
-    if not fichiers:
+    if not FICHIER_PREVISIONS_REG.exists():
         return None
 
-    frames = []
+    df = pd.read_csv(FICHIER_PREVISIONS_REG, sep=";", low_memory=False)
 
-    for f in fichiers:
-        try:
-            df = pd.read_csv(f, sep=";", low_memory=False)
+    df["timestamp"] = pd.to_datetime(df["timestamp"], errors="coerce")
+    df["code_region"] = df["code_region"].apply(normalize_code)
 
-            nom = f.stem
-            date_str = nom.replace("prevision_operationnelle_", "")
-
-            df["date_cible"] = pd.to_datetime(date_str, errors="coerce")
-            df["timestamp"] = df["date_cible"] + pd.to_timedelta(
-                df["heure_cible"], unit="h"
-            )
-
-            if "consommation_prevue" not in df.columns:
-                continue
-
-            frames.append(df[["timestamp", "consommation_prevue"]])
-
-        except Exception:
-            continue
-
-    if not frames:
-        return None
-
-    df = pd.concat(frames, ignore_index=True)
-    df = df.dropna(subset=["timestamp"])
-    df = df.sort_values("timestamp").reset_index(drop=True)
-
-    return df
-
-
-# ============================================================
-# 6. CHARGEMENT éCO2mix (CONSOLIDÉ + TEMPS RÉEL)
-# ============================================================
-
-def _appel_eco2mix(url, date_debut, date_fin, nom):
-    """
-    Appel générique à l'API ODRÉ avec filtre date.
-    Retourne un DataFrame brut ou None.
-    """
-
-    try:
-        where_clause = (
-            f'date_heure >= "{date_debut}T00:00:00" '
-            f'AND date_heure <= "{date_fin}T23:59:59"'
-        )
-
-        params = {
-            "delimiter": ";",
-            "timezone": "Europe/Paris",
-            "use_labels": "false",
-            "where": where_clause,
-        }
-
-        response = requests.get(url, params=params, timeout=180)
-        response.raise_for_status()
-
-        df = pd.read_csv(
-            io.BytesIO(response.content),
-            sep=";",
-            low_memory=False,
-        )
-
-        return df
-
-    except Exception as e:
-        st.warning(f"éCO2mix {nom} : {type(e).__name__} — {e}")
-        return None
-
-
-def _extraire_reel_rte(df, nom):
-    """
-    Transforme un DataFrame éCO2mix brut en :
-        timestamp | reel | rte
-    """
-
-    if df is None or df.empty:
-        return None
-
-    # Périmètre France
-    if "perimetre" in df.columns:
-        df = df[df["perimetre"].astype(str).str.strip() == "France"]
-
-    if df.empty:
-        return None
-
-    if "date_heure" not in df.columns:
-        return None
-
-    df["date_heure_utc"] = pd.to_datetime(
-        df["date_heure"], errors="coerce", utc=True
-    )
-
-    df = df.dropna(subset=["date_heure_utc"]).copy()
-
-    df["date_heure"] = df["date_heure_utc"].dt.tz_convert("Europe/Paris")
-
-    # HH:00 uniquement
-    df = df[df["date_heure"].dt.minute == 0].copy()
-
-    if df.empty:
-        return None
-
-    # Réel
-    if "consommation" in df.columns:
-        df["reel"] = pd.to_numeric(df["consommation"], errors="coerce")
-    else:
-        df["reel"] = np.nan
-
-    # Prévision J-1 RTE
-    if "prevision_j1" in df.columns:
-        df["rte"] = pd.to_numeric(df["prevision_j1"], errors="coerce")
-    else:
-        df["rte"] = np.nan
-
-    # Timestamp naïf heure locale
-    df["timestamp"] = df["date_heure"].dt.tz_localize(None)
-
-    df = df[["timestamp", "reel", "rte"]].copy()
-
-    df = df.drop_duplicates(subset=["timestamp"], keep="first")
-    df = df.sort_values("timestamp").reset_index(drop=True)
-
-    return df
+    return df.dropna(subset=["timestamp"]).sort_values("timestamp").reset_index(drop=True)
 
 
 @st.cache_data(ttl=1800, show_spinner=False)
-def charger_eco2mix_complet(date_debut: str, date_fin: str):
-    """
-    Charge les données éCO2mix depuis DEUX sources :
+def charger_eco2mix_national(date_debut, date_fin):
 
-        1. Consolidé (eco2mix-national-cons-def)
-           → couvre 2010 → il y a quelques semaines
-           → PRIORITAIRE (données définitives RTE)
+    def appel(url, nom):
+        try:
+            where = (
+                f'date_heure >= "{date_debut}T00:00:00" '
+                f'AND date_heure <= "{date_fin}T23:59:59"'
+            )
+            params = {
+                "delimiter": ";", "timezone": "Europe/Paris",
+                "use_labels": "false", "where": where,
+            }
+            r = requests.get(url, params=params, timeout=180)
+            r.raise_for_status()
+            return pd.read_csv(io.BytesIO(r.content), sep=";", low_memory=False)
+        except Exception as e:
+            st.warning(f"éCO2mix {nom} : {e}")
+            return None
 
-        2. Temps réel (eco2mix-national-tr)
-           → couvre seulement les dernières semaines
-           → complément pour les jours récents
+    def extraire(df):
+        if df is None or df.empty:
+            return None
 
-    Retourne un DataFrame :
-        timestamp | reel | rte
-    """
+        if "perimetre" in df.columns:
+            df = df[df["perimetre"].astype(str).str.strip() == "France"]
 
-    # --- 1. Consolidé ---
-    df_consolide_brut = _appel_eco2mix(
-        URL_ECO2MIX_CONSOLIDE,
-        date_debut,
-        date_fin,
-        "consolidé",
-    )
-    df_consolide = _extraire_reel_rte(df_consolide_brut, "consolidé")
+        if df.empty or "date_heure" not in df.columns:
+            return None
 
-    # --- 2. Temps réel ---
-    df_tr_brut = _appel_eco2mix(
-        URL_ECO2MIX_TEMPS_REEL,
-        date_debut,
-        date_fin,
-        "temps réel",
-    )
-    df_tr = _extraire_reel_rte(df_tr_brut, "temps réel")
+        df["date_heure_utc"] = pd.to_datetime(df["date_heure"], errors="coerce", utc=True)
+        df = df.dropna(subset=["date_heure_utc"])
+        df["date_heure"] = df["date_heure_utc"].dt.tz_convert("Europe/Paris")
+        df = df[df["date_heure"].dt.minute == 0].copy()
 
-    # --- 3. Fusion avec priorité au consolidé ---
+        if "consommation" in df.columns:
+            df["reel"] = pd.to_numeric(df["consommation"], errors="coerce")
+        else:
+            df["reel"] = np.nan
+
+        if "prevision_j1" in df.columns:
+            df["rte"] = pd.to_numeric(df["prevision_j1"], errors="coerce")
+        else:
+            df["rte"] = np.nan
+
+        df["timestamp"] = df["date_heure"].dt.tz_localize(None)
+
+        df = df[["timestamp", "reel", "rte"]].drop_duplicates("timestamp")
+        return df.sort_values("timestamp").reset_index(drop=True)
+
+    df_cons = extraire(appel(URL_ECO2MIX_CONSOLIDE, "consolidé"))
+    df_tr = extraire(appel(URL_ECO2MIX_TEMPS_REEL, "temps réel"))
+
     frames = []
-
-    if df_consolide is not None and len(df_consolide) > 0:
-        frames.append(df_consolide)
-
+    if df_cons is not None and len(df_cons) > 0:
+        frames.append(df_cons)
     if df_tr is not None and len(df_tr) > 0:
-
-        if df_consolide is not None and len(df_consolide) > 0:
-            # On ne garde du temps réel que les timestamps absents
-            # du consolidé
-            ts_consolide = set(df_consolide["timestamp"])
-            df_tr = df_tr[~df_tr["timestamp"].isin(ts_consolide)].copy()
-
+        if df_cons is not None and len(df_cons) > 0:
+            ts = set(df_cons["timestamp"])
+            df_tr = df_tr[~df_tr["timestamp"].isin(ts)]
         if len(df_tr) > 0:
             frames.append(df_tr)
 
     if not frames:
         return None
 
-    df = pd.concat(frames, ignore_index=True)
-
-    df = df.sort_values("timestamp").reset_index(drop=True)
-
-    return df
+    return pd.concat(frames, ignore_index=True).sort_values("timestamp").reset_index(drop=True)
 
 
 # ============================================================
-# 7. CONSTRUCTION DU DATAFRAME UNIFIÉ
+# 7. GRAPHIQUES
 # ============================================================
 
-def construire_df_unifie(df_modele, df_op, df_rte):
-    """
-    Fusionne les sources en un seul DataFrame :
-        timestamp | modele | rte | reel
-    """
-
-    frames = []
-
-    if (
-        df_modele is not None
-        and len(df_modele) > 0
-        and "consommation_prevue" in df_modele.columns
-    ):
-        tmp = df_modele[["timestamp", "consommation_prevue"]].copy()
-        tmp = tmp.rename(columns={"consommation_prevue": "modele"})
-        frames.append(tmp)
-
-    if (
-        df_op is not None
-        and len(df_op) > 0
-        and "consommation_prevue" in df_op.columns
-    ):
-        tmp = df_op[["timestamp", "consommation_prevue"]].copy()
-        tmp = tmp.rename(columns={"consommation_prevue": "modele"})
-        frames.append(tmp)
-
-    if df_rte is not None and len(df_rte) > 0:
-        frames.append(df_rte)
-
-    if not frames:
-        return pd.DataFrame(
-            columns=["timestamp", "modele", "rte", "reel"]
-        )
-
-    df = pd.concat(frames, ignore_index=True)
-
-    for col in ["modele", "rte", "reel"]:
-        if col not in df.columns:
-            df[col] = np.nan
-
-    agg_dict = {col: "mean" for col in ["modele", "rte", "reel"]}
-
-    df = df.groupby("timestamp", as_index=False).agg(agg_dict)
-
-    df = df[["timestamp", "modele", "rte", "reel"]]
-    df = df.sort_values("timestamp").reset_index(drop=True)
-
-    return df
-
-
-# ============================================================
-# 8. GRAPHIQUE
-# ============================================================
-
-def graphique_courbes(df, titre):
+def graphique_courbes_nationales(df, titre):
 
     fig = go.Figure()
 
+    # 1. Modèle national
     if "modele" in df.columns and df["modele"].notna().any():
         fig.add_trace(go.Scatter(
-            x=df["timestamp"],
-            y=df["modele"],
-            mode="lines",
-            name="Prévision modèle (RF + XGB)",
+            x=df["timestamp"], y=df["modele"], mode="lines",
+            name="Prévision modèle national",
             line=dict(color=COULEUR_MODELE, width=2.5),
         ))
 
+    # 2. Somme des modèles régionaux
+    if "somme_regions" in df.columns and df["somme_regions"].notna().any():
+        fig.add_trace(go.Scatter(
+            x=df["timestamp"], y=df["somme_regions"], mode="lines",
+            name="Somme modèles régionaux",
+            line=dict(color=COULEURS["bordeaux_clair"], width=2, dash="dot"),
+        ))
+
+    # 3. RTE
     if "rte" in df.columns and df["rte"].notna().any():
         fig.add_trace(go.Scatter(
-            x=df["timestamp"],
-            y=df["rte"],
-            mode="lines",
+            x=df["timestamp"], y=df["rte"], mode="lines",
             name="Prévision RTE J-1",
             line=dict(color=COULEUR_RTE, width=2, dash="dash"),
         ))
 
+    # 4. Réel
     if "reel" in df.columns and df["reel"].notna().any():
         fig.add_trace(go.Scatter(
-            x=df["timestamp"],
-            y=df["reel"],
-            mode="lines",
+            x=df["timestamp"], y=df["reel"], mode="lines",
             name="Consommation réelle (éCO2mix)",
             line=dict(color=COULEUR_REEL, width=2.5),
         ))
 
     fig.update_layout(
-        title=dict(
-            text=titre,
-            font=dict(size=18, color=COULEURS["bordeaux"]),
-        ),
+        title=dict(text=titre, font=dict(size=16, color=COULEURS["bordeaux"])),
         xaxis_title="Date / Heure",
         yaxis_title="Consommation (MW)",
         plot_bgcolor=COULEURS["beige_fonce"],
@@ -565,64 +465,91 @@ def graphique_courbes(df, titre):
             bgcolor=COULEURS["beige_fonce"],
             bordercolor=COULEURS["rose"],
             borderwidth=1,
-            orientation="h",
-            yanchor="bottom",
-            y=1.02,
-            xanchor="right",
-            x=1,
+            orientation="h", yanchor="bottom", y=1.02,
+            xanchor="right", x=1,
         ),
-        xaxis=dict(
-            gridcolor=COULEURS["rose_clair"],
-            showgrid=True,
-        ),
-        yaxis=dict(
-            gridcolor=COULEURS["rose_clair"],
-            showgrid=True,
-        ),
-        height=550,
+        xaxis=dict(gridcolor=COULEURS["rose_clair"]),
+        yaxis=dict(gridcolor=COULEURS["rose_clair"]),
+        height=520,
         margin=dict(l=40, r=40, t=80, b=40),
+    )
+    return fig
+
+def graphique_courbes_regionale(df_region, nom_region, titre):
+
+    fig = go.Figure()
+
+    if "consommation_prevue" in df_region.columns:
+        fig.add_trace(go.Scatter(
+            x=df_region["timestamp"], y=df_region["consommation_prevue"],
+            mode="lines", name="Prévision modèle régional",
+            line=dict(color=COULEUR_MODELE, width=2.5),
+        ))
+
+    if "consommation_reelle" in df_region.columns:
+        fig.add_trace(go.Scatter(
+            x=df_region["timestamp"], y=df_region["consommation_reelle"],
+            mode="lines", name="Consommation réelle (éCO2mix)",
+            line=dict(color=COULEUR_REEL, width=2.5),
+        ))
+
+    fig.update_layout(
+        title=dict(text=titre, font=dict(size=14, color=COULEURS["bordeaux"])),
+        xaxis_title="Date / Heure",
+        yaxis_title="Consommation (MW)",
+        plot_bgcolor=COULEURS["beige_fonce"],
+        paper_bgcolor=COULEURS["beige"],
+        font=dict(color=COULEURS["texte"], family="Georgia"),
+        hovermode="x unified",
+        legend=dict(
+            bgcolor=COULEURS["beige_fonce"],
+            bordercolor=COULEURS["rose"],
+            borderwidth=1,
+            orientation="h", yanchor="bottom", y=1.02,
+            xanchor="right", x=1,
+        ),
+        xaxis=dict(gridcolor=COULEURS["rose_clair"]),
+        yaxis=dict(gridcolor=COULEURS["rose_clair"]),
+        height=420,
+        margin=dict(l=40, r=40, t=60, b=40),
+    )
+    return fig
+
+
+def carte_choroplete(df_snapshot, geojson, colonne, titre, echelle, unite="GW"):
+
+    fig = px.choropleth(
+        df_snapshot,
+        geojson=geojson,
+        locations="code_region",
+        featureidkey="properties.code",
+        color=colonne,
+        color_continuous_scale=echelle,
+        labels={colonne: unite, "code_region": "Région"},
+        hover_name="nom_region",
+        hover_data={colonne: ":.2f", "code_region": False},
+    )
+
+    fig.update_geos(
+        fitbounds="locations",
+        visible=False,
+        bgcolor=COULEURS["beige"],
+    )
+
+    fig.update_layout(
+        title=dict(text=titre, font=dict(size=14, color=COULEURS["bordeaux"])),
+        paper_bgcolor=COULEURS["beige"],
+        font=dict(color=COULEURS["texte"], family="Georgia"),
+        height=520,
+        margin=dict(l=0, r=0, t=50, b=0),
+        coloraxis_colorbar=dict(title=unite, thickness=12, len=0.7),
     )
 
     return fig
 
 
 # ============================================================
-# 9. MÉTRIQUES
-# ============================================================
-
-def calculer_metriques(df):
-
-    resultats = {}
-
-    if "reel" not in df.columns or df["reel"].notna().sum() == 0:
-        return resultats
-
-    reel = df["reel"]
-
-    for nom, col in [("modele", "modele"), ("rte", "rte")]:
-
-        if col not in df.columns:
-            continue
-
-        masque = df[col].notna() & reel.notna()
-
-        if masque.sum() == 0:
-            continue
-
-        err = df.loc[masque, col] - reel[masque]
-
-        resultats[nom] = {
-            "MAE": float(np.mean(np.abs(err))),
-            "RMSE": float(np.sqrt(np.mean(err ** 2))),
-            "Biais": float(np.mean(err)),
-            "n": int(masque.sum()),
-        }
-
-    return resultats
-
-
-# ============================================================
-# 10. PAGE D'ACCUEIL
+# 8. PAGE D'ACCUEIL
 # ============================================================
 
 def page_accueil(periode):
@@ -634,9 +561,6 @@ def page_accueil(periode):
             <p style="text-align:center; font-size:1.1rem;">
                 France métropolitaine — Modèle ensemble RF + XGBoost
             </p>
-            <p style="text-align:center; color:{COULEURS['gris_doux']};">
-                Pour commencer, choisissez la plage de dates à afficher.
-            </p>
         </div>
         """,
         unsafe_allow_html=True,
@@ -645,13 +569,9 @@ def page_accueil(periode):
     st.markdown(
         f"""
         <div class="bandeau-info">
-            <b> Période autorisée</b><br>
-            Le dashboard ne couvre que la <b>période de test</b>
-            (post-entraînement), soit à partir du
-            <b>{periode['date_min'].strftime('%d/%m/%Y')}</b>.<br>
-            <span style="font-size:0.85rem; color:{COULEURS['gris_doux']};">
-                {periode['source']}
-            </span>
+            <b>📌 Période autorisée :</b>
+            {periode['date_min'].strftime('%d/%m/%Y')}
+            → {periode['date_max'].strftime('%d/%m/%Y')}
         </div>
         """,
         unsafe_allow_html=True,
@@ -661,24 +581,8 @@ def page_accueil(periode):
 
     with col_m:
 
-        st.markdown(
-            f"""
-            <div class="carte-accueil">
-                <h3 style="text-align:center;">📅 Choix de la période</h3>
-            </div>
-            """,
-            unsafe_allow_html=True,
-        )
-
-        defaut_debut = max(
-            periode["date_min"].date(),
-            date.today() - timedelta(days=7),
-        )
-        defaut_fin = min(
-            periode["date_max"].date(),
-            date.today(),
-        )
-
+        defaut_debut = max(periode["date_min"].date(), date.today() - timedelta(days=7))
+        defaut_fin = min(periode["date_max"].date(), date.today())
         if defaut_debut > defaut_fin:
             defaut_debut = periode["date_min"].date()
             defaut_fin = periode["date_max"].date()
@@ -700,17 +604,503 @@ def page_accueil(periode):
         )
 
         if st.button("Afficher le dashboard", use_container_width=True):
-
             if date_debut > date_fin:
-                st.error(
-                    "La date de début doit être antérieure à la date de fin."
-                )
+                st.error("Date de début > date de fin.")
             else:
                 st.session_state["date_debut"] = date_debut
                 st.session_state["date_fin"] = date_fin
                 st.session_state["dashboard_actif"] = True
                 st.rerun()
 
+
+# ============================================================
+# 9. ONGLET NATIONAL
+# ============================================================
+
+def onglet_national(periode, date_debut, date_fin):
+
+    st.markdown("### 📈 Courbes de consommation nationale")
+
+    df_modele = charger_predictions_nationales()
+    df_rte = charger_eco2mix_national(date_debut.isoformat(), date_fin.isoformat())
+    df_reg = charger_previsions_regionales()
+
+    frames = []
+
+    # --------------------------------------------------------
+    # Modèle national
+    # --------------------------------------------------------
+
+    if (
+        df_modele is not None
+        and len(df_modele) > 0
+        and "consommation_prevue" in df_modele.columns
+    ):
+        tmp = df_modele[["timestamp", "consommation_prevue"]].rename(
+            columns={"consommation_prevue": "modele"}
+        )
+        frames.append(tmp)
+
+    # --------------------------------------------------------
+    # RTE + réel
+    # --------------------------------------------------------
+
+    if df_rte is not None and len(df_rte) > 0:
+        frames.append(df_rte)
+
+    # --------------------------------------------------------
+    # Fusion principale
+    # --------------------------------------------------------
+
+    if not frames:
+        st.warning("Aucune donnée nationale disponible.")
+        return
+
+    df = pd.concat(frames, ignore_index=True)
+    for c in ["modele", "rte", "reel"]:
+        if c not in df.columns:
+            df[c] = np.nan
+
+    df = df.groupby("timestamp", as_index=False).agg(
+        {c: "mean" for c in ["modele", "rte", "reel"]}
+    )
+
+    # --------------------------------------------------------
+    # Somme des modèles régionaux
+    # --------------------------------------------------------
+    # Pour chaque timestamp, on somme les prévisions de toutes
+    # les régions. On n'inclut que les timestamps où TOUTES les
+    # régions ont une prévision (sinon la somme est biaisée).
+    # --------------------------------------------------------
+
+    if df_reg is not None and len(df_reg) > 0:
+
+        df_reg_clean = df_reg.dropna(subset=["consommation_prevue"])
+
+        # Nombre total de régions
+        nb_regions_total = df_reg_clean["code_region"].nunique()
+
+        # Somme par timestamp + comptage du nombre de régions
+        somme_reg = (
+            df_reg_clean
+            .groupby("timestamp")["consommation_prevue"]
+            .agg(["sum", "count"])
+            .reset_index()
+            .rename(columns={"sum": "somme_regions", "count": "nb_regions"})
+        )
+
+        # On ne garde que les timestamps où toutes les régions
+        # ont une prévision
+        somme_reg = somme_reg[
+            somme_reg["nb_regions"] == nb_regions_total
+        ].copy()
+
+        if len(somme_reg) > 0:
+            df = df.merge(
+                somme_reg[["timestamp", "somme_regions"]],
+                on="timestamp",
+                how="left",
+            )
+        else:
+            df["somme_regions"] = np.nan
+
+    else:
+        df["somme_regions"] = np.nan
+
+    # --------------------------------------------------------
+    # Filtre date
+    # --------------------------------------------------------
+
+    d_debut = pd.Timestamp(date_debut)
+    d_fin = pd.Timestamp(date_fin) + pd.Timedelta(days=1) - pd.Timedelta(seconds=1)
+    df = df[(df["timestamp"] >= d_debut) & (df["timestamp"] <= d_fin)]
+
+    if df.empty:
+        st.warning("Aucune donnée sur cette période.")
+        return
+
+    # --------------------------------------------------------
+    # Métriques : modèle national, RTE, somme régions
+    # --------------------------------------------------------
+
+    reel = df["reel"]
+
+    cibles = [
+        ("modele", "Modèle national"),
+        ("rte", "RTE"),
+        ("somme_regions", "Somme régions"),
+    ]
+
+    cols = st.columns(len(cibles) * 2)
+    idx = 0
+
+    for col_name, label in cibles:
+
+        if col_name not in df.columns:
+            continue
+
+        m = df[col_name].notna() & reel.notna()
+
+        if m.sum() == 0:
+            continue
+
+        err = df.loc[m, col_name] - reel[m]
+
+        with cols[idx]:
+            st.metric(f"MAE {label} (MW)", f"{np.mean(np.abs(err)):.0f}")
+        idx += 1
+
+        with cols[idx]:
+            st.metric(f"RMSE {label} (MW)", f"{np.sqrt(np.mean(err**2)):.0f}")
+        idx += 1
+
+    # --------------------------------------------------------
+    # Graphique
+    # --------------------------------------------------------
+
+    fig = graphique_courbes_nationales(
+        df,
+        f"Prévision vs Réel — du {date_debut.strftime('%d/%m/%Y')} au {date_fin.strftime('%d/%m/%Y')}",
+    )
+    st.plotly_chart(fig, use_container_width=True)
+
+# ============================================================
+# 10. ONGLET CARTE
+# ============================================================
+
+def onglet_carte(periode, date_debut, date_fin):
+
+    st.markdown("### 🗺️ Carte régionale de la consommation")
+
+    df_reg = charger_previsions_regionales()
+
+    if df_reg is None:
+        st.warning(
+            "Aucune donnée régionale.\n\n"
+            "Lance d'abord :\n"
+            "- `python 08_consommation_regionale.py`\n"
+            "- `python 09_meteo_regionale.py`\n"
+            "- `python 11_modelisation_regionale.py`"
+        )
+        return
+
+    geojson = charger_geojson_regions()
+    if geojson is None:
+        return
+
+    df = df_reg.copy()
+    df["nom_region"] = df["code_region"].map(REGIONS_METROPOLE)
+
+    # --------------------------------------------------------
+    # Diagnostic
+    # --------------------------------------------------------
+
+    with st.expander("🔍 Diagnostic régional", expanded=False):
+
+        codes_presents = sorted(df["code_region"].unique())
+        codes_attendus = sorted(REGIONS_METROPOLE.keys())
+
+        st.write(
+            f"**Régions attendues ({len(codes_attendus)})** : "
+            f"{', '.join(codes_attendus)}"
+        )
+        st.write(
+            f"**Régions dans les données ({len(codes_presents)})** : "
+            f"{', '.join(codes_presents)}"
+        )
+
+        manquantes = set(codes_attendus) - set(codes_presents)
+
+        if manquantes:
+            st.error(
+                f"⚠ Régions manquantes dans previsions_regionales.csv : "
+                f"{sorted(manquantes)}"
+            )
+
+        st.write(
+            f"**Période** : {df['timestamp'].min()} → {df['timestamp'].max()}"
+        )
+
+    # --------------------------------------------------------
+    # Filtre date
+    # --------------------------------------------------------
+
+    d_debut = pd.Timestamp(date_debut)
+    d_fin = pd.Timestamp(date_fin) + pd.Timedelta(days=1) - pd.Timedelta(seconds=1)
+
+    df_periode = df[
+        (df["timestamp"] >= d_debut) & (df["timestamp"] <= d_fin)
+    ].copy()
+
+    if df_periode.empty:
+        st.warning("Pas de données régionales sur cette période.")
+        return
+
+    # ========================================================
+    # PERFORMANCES PAR RÉGION (sur la période affichée)
+    # ========================================================
+    # MEILLEUR = MAE la plus faible
+    # PIRE = MAE la plus élevée
+    # ========================================================
+
+    perf_rows = []
+
+    for code_region in sorted(df_periode["code_region"].unique()):
+
+        sub = df_periode[df_periode["code_region"] == code_region].copy()
+
+        m = (
+            sub["consommation_prevue"].notna()
+            & sub["consommation_reelle"].notna()
+        )
+
+        if m.sum() == 0:
+            continue
+
+        err = (
+            sub.loc[m, "consommation_prevue"]
+            - sub.loc[m, "consommation_reelle"]
+        )
+
+        mae = float(np.mean(np.abs(err)))
+        rmse = float(np.sqrt(np.mean(err ** 2)))
+        biais = float(np.mean(err))
+
+        # MAE en % de la conso moyenne (pour comparaison entre régions
+        # de tailles très différentes)
+        conso_moy = float(sub.loc[m, "consommation_reelle"].mean())
+        mae_pct = (mae / conso_moy * 100) if conso_moy > 0 else np.nan
+
+        perf_rows.append({
+            "code_region": code_region,
+            "nom_region": REGIONS_METROPOLE.get(code_region, code_region),
+            "MAE_MW": mae,
+            "MAE_pct": mae_pct,
+            "RMSE_MW": rmse,
+            "biais_MW": biais,
+            "n": int(m.sum()),
+        })
+
+    df_perf = pd.DataFrame(perf_rows)
+
+    # --------------------------------------------------------
+    # Choix valeur affichée sur la carte
+    # --------------------------------------------------------
+
+    col1, col2 = st.columns([1, 3])
+
+    with col1:
+        type_valeur = st.selectbox(
+            "Valeur affichée",
+            options=["Prévision modèle (régional)", "Consommation réelle"],
+            index=0,
+        )
+
+    colonne = (
+        "consommation_prevue" if type_valeur == "Prévision modèle (régional)"
+        else "consommation_reelle"
+    )
+
+    # --------------------------------------------------------
+    # Slider temporel
+    # --------------------------------------------------------
+
+    timestamps_dispo = sorted(df_periode["timestamp"].unique())
+
+    if len(timestamps_dispo) == 0:
+        st.warning("Aucun timestamp disponible.")
+        return
+
+    ts_min = pd.Timestamp(timestamps_dispo[0])
+    ts_max = pd.Timestamp(timestamps_dispo[-1])
+    default_ts = pd.Timestamp(timestamps_dispo[len(timestamps_dispo) // 2])
+
+    ts_selectionne = st.slider(
+        "Heure sélectionnée",
+        min_value=ts_min.to_pydatetime(),
+        max_value=ts_max.to_pydatetime(),
+        value=default_ts.to_pydatetime(),
+        step=timedelta(hours=1),
+        format="DD/MM/YYYY HH:mm",
+    )
+
+    ts_selectionne = pd.Timestamp(ts_selectionne)
+
+    # --------------------------------------------------------
+    # Snapshot
+    # --------------------------------------------------------
+
+    df_snap = df_periode[df_periode["timestamp"] == ts_selectionne].copy()
+
+    if df_snap.empty:
+        diffs = (df_periode["timestamp"] - ts_selectionne).abs()
+        closest = df_periode.loc[diffs.idxmin(), "timestamp"]
+        df_snap = df_periode[df_periode["timestamp"] == closest].copy()
+        ts_selectionne = closest
+
+    df_snap["valeur_gw"] = df_snap[colonne] / 1000.0
+
+    # ========================================================
+    # LAYOUT
+    # ========================================================
+
+    col_g, col_d = st.columns([1, 1])
+
+    # --------------------------------------------------------
+    # COLONNE GAUCHE : carte + top/flop performance
+    # --------------------------------------------------------
+
+    with col_g:
+
+        st.markdown(f"**Snapshot : {ts_selectionne.strftime('%d/%m/%Y %H:%M')}**")
+
+        snapshot = (
+            df_snap[["code_region", "nom_region", "valeur_gw"]]
+            .dropna(subset=["valeur_gw"])
+            .drop_duplicates("code_region")
+        )
+
+        if snapshot.empty:
+            st.info("Aucune valeur à ce timestamp.")
+        else:
+            titre = f"{type_valeur} ({ts_selectionne.strftime('%d/%m %H:%M')}) — GW"
+            fig_carte = carte_choroplete(
+                snapshot, geojson, "valeur_gw", titre,
+                CARTE_SCALE, unite="GW"
+            )
+            st.plotly_chart(fig_carte, use_container_width=True)
+
+            manquants_snap = (
+                set(REGIONS_METROPOLE.keys()) - set(snapshot["code_region"])
+            )
+            if manquants_snap:
+                noms = [REGIONS_METROPOLE[c] for c in sorted(manquants_snap)]
+                st.markdown(
+                    f'<div class="warning-box">'
+                    f'⚠ Régions sans données à ce timestamp : '
+                    f'{", ".join(noms)}'
+                    f'</div>',
+                    unsafe_allow_html=True,
+                )
+
+        # ----------------------------------------------------
+        # TOP / FLOP PAR PERFORMANCE DU MODÈLE
+        # ----------------------------------------------------
+
+        if not df_perf.empty:
+
+            st.markdown("---")
+            st.markdown(
+                f"**🎯 Performance du modèle par région "
+                f"({date_debut.strftime('%d/%m/%Y')} → "
+                f"{date_fin.strftime('%d/%m/%Y')})**"
+            )
+
+            # On trie par MAE en % (équité entre régions de tailles
+            # différentes) puis on affiche la MAE en MW
+            df_perf_tri = df_perf.dropna(subset=["MAE_pct"]).copy()
+            df_perf_tri = df_perf_tri.sort_values("MAE_pct")
+
+            meilleures = df_perf_tri.head(5)
+            pires = df_perf_tri.tail(5).iloc[::-1]  # plus pire en haut
+
+            c1, c2 = st.columns(2)
+
+            with c1:
+                st.markdown("**🥇 Modèle le plus précis (MAE %)**")
+                for _, r in meilleures.iterrows():
+                    st.markdown(
+                        f"- **{r['nom_region']}** — "
+                        f"MAE {r['MAE_MW']:.0f} MW "
+                        f"({r['MAE_pct']:.2f} %)"
+                    )
+
+            with c2:
+                st.markdown("**🥉 Modèle le moins précis (MAE %)**")
+                for _, r in pires.iterrows():
+                    st.markdown(
+                        f"- **{r['nom_region']}** — "
+                        f"MAE {r['MAE_MW']:.0f} MW "
+                        f"({r['MAE_pct']:.2f} %)"
+                    )
+
+            # Tableau détaillé
+            with st.expander("📊 Tableau complet des performances"):
+
+                df_affichage = df_perf.copy()
+                df_affichage = df_affichage.rename(columns={
+                    "code_region": "Code",
+                    "nom_region": "Région",
+                    "MAE_MW": "MAE (MW)",
+                    "MAE_pct": "MAE (%)",
+                    "RMSE_MW": "RMSE (MW)",
+                    "biais_MW": "Biais (MW)",
+                    "n": "n_heures",
+                })
+                df_affichage = df_affichage.sort_values("MAE (%)")
+
+                st.dataframe(
+                    df_affichage,
+                    use_container_width=True,
+                    height=400,
+                )
+
+    # --------------------------------------------------------
+    # COLONNE DROITE : détail région
+    # --------------------------------------------------------
+
+    with col_d:
+
+        st.markdown("**Détail d'une région**")
+
+        regions_dispo = sorted(df_periode["nom_region"].dropna().unique())
+        region_choisie = st.selectbox(
+            "Région",
+            options=regions_dispo,
+            index=0,
+            key="region_select",
+        )
+
+        df_reg_sel = df_periode[
+            df_periode["nom_region"] == region_choisie
+        ].sort_values("timestamp")
+
+        if df_reg_sel.empty:
+            st.info("Pas de données pour cette région.")
+        else:
+            fig = graphique_courbes_regionale(
+                df_reg_sel, region_choisie,
+                f"{region_choisie} — du "
+                f"{date_debut.strftime('%d/%m')} au "
+                f"{date_fin.strftime('%d/%m')}",
+            )
+            st.plotly_chart(fig, use_container_width=True)
+
+            # Performance de cette région
+            code_region_sel = df_reg_sel["code_region"].iloc[0]
+
+            perf_sel = df_perf[
+                df_perf["code_region"] == code_region_sel
+            ]
+
+            if not perf_sel.empty:
+                row = perf_sel.iloc[0]
+                c1, c2, c3 = st.columns(3)
+                with c1:
+                    st.metric(
+                        "MAE (MW)",
+                        f"{row['MAE_MW']:.0f}",
+                    )
+                with c2:
+                    st.metric(
+                        "MAE (%)",
+                        f"{row['MAE_pct']:.2f} %",
+                    )
+                with c3:
+                    st.metric(
+                        "Biais (MW)",
+                        f"{row['biais_MW']:+.0f}",
+                    )
 
 # ============================================================
 # 11. PAGE DASHBOARD
@@ -733,13 +1123,9 @@ def page_dashboard(periode):
     st.markdown(
         f"""
         <div class="bandeau-info">
-            <b> Période autorisée :</b>
+            <b>📌 Période autorisée :</b>
             {periode['date_min'].strftime('%d/%m/%Y')}
-            → {periode['date_max'].strftime('%d/%m/%Y')}<br>
-            <span style="font-size:0.85rem; color:{COULEURS['gris_doux']};">
-                Le dashboard ne couvre que la période de test
-                (post-entraînement). {periode['source']}
-            </span>
+            → {periode['date_max'].strftime('%d/%m/%Y')}
         </div>
         """,
         unsafe_allow_html=True,
@@ -773,7 +1159,7 @@ def page_dashboard(periode):
             st.rerun()
 
     if date_debut > date_fin:
-        st.error("La date de début doit être antérieure à la date de fin.")
+        st.error("Date de début > date de fin.")
         return
 
     if date_debut < periode["date_min"].date():
@@ -783,187 +1169,19 @@ def page_dashboard(periode):
 
     st.markdown("---")
 
-    # --------------------------------------------------------
-    # Chargement
-    # --------------------------------------------------------
+    tab1, tab2 = st.tabs(["📈 Courbes nationales", "🗺️ Carte régionale"])
 
-    with st.spinner("Chargement des données..."):
+    with tab1:
+        onglet_national(periode, date_debut, date_fin)
 
-        df_modele = charger_predictions_modele()
-        df_op = charger_prevision_operationnelle()
-        df_rte = charger_eco2mix_complet(
-            date_debut.isoformat(),
-            date_fin.isoformat(),
-        )
-
-    # --------------------------------------------------------
-    # Diagnostic
-    # --------------------------------------------------------
-
-    with st.expander(" Diagnostic des sources", expanded=False):
-
-        st.write(
-            f"**predictions.csv** : "
-            f"{'absent' if df_modele is None else str(len(df_modele)) + ' lignes'}"
-        )
-        st.write(
-            f"**prevision_operationnelle** : "
-            f"{'absent' if df_op is None else str(len(df_op)) + ' lignes'}"
-        )
-        st.write(
-            f"**éCO2mix (consolidé + temps réel)** : "
-            f"{'absent' if df_rte is None else str(len(df_rte)) + ' lignes'}"
-        )
-
-        if df_modele is not None and len(df_modele) > 0:
-            st.write(
-                "Plage predictions.csv : "
-                f"{df_modele['timestamp'].min()} → "
-                f"{df_modele['timestamp'].max()}"
-            )
-
-        if df_rte is not None and len(df_rte) > 0:
-            st.write(
-                "Plage éCO2mix : "
-                f"{df_rte['timestamp'].min()} → "
-                f"{df_rte['timestamp'].max()}"
-            )
-            st.write(
-                f"Réel disponible : {df_rte['reel'].notna().sum()} points"
-            )
-            st.write(
-                f"RTE J-1 disponible : {df_rte['rte'].notna().sum()} points"
-            )
-
-    # --------------------------------------------------------
-    # Fusion
-    # --------------------------------------------------------
-
-    df = construire_df_unifie(df_modele, df_op, df_rte)
-
-    d_debut = pd.Timestamp(date_debut)
-    d_fin = (
-        pd.Timestamp(date_fin)
-        + pd.Timedelta(days=1)
-        - pd.Timedelta(seconds=1)
-    )
-
-    if not df.empty:
-        df = df[
-            (df["timestamp"] >= d_debut) & (df["timestamp"] <= d_fin)
-        ].copy()
-
-    if df.empty:
-        st.warning(
-            "Aucune donnée disponible sur cette période.\n\n"
-            "Essaie une autre plage de dates, ou clique sur "
-            "**Rafraîchir les données**."
-        )
-        return
-
-    # --------------------------------------------------------
-    # Vérification des séries
-    # --------------------------------------------------------
-
-    series_non_vides = {
-        "modele": df["modele"].notna().any() if "modele" in df else False,
-        "rte": df["rte"].notna().any() if "rte" in df else False,
-        "reel": df["reel"].notna().any() if "reel" in df else False,
-    }
-
-    if not any(series_non_vides.values()):
-        st.warning("Aucune série n'a de données sur cette période.")
-        return
-
-    # --------------------------------------------------------
-    # Métriques
-    # --------------------------------------------------------
-
-    st.markdown("###  Indicateurs de performance")
-
-    metriques = calculer_metriques(df)
-
-    if metriques:
-
-        cols = st.columns(len(metriques) * 2)
-        idx = 0
-
-        for nom, valeurs in metriques.items():
-            label = "Modèle" if nom == "modele" else "RTE"
-            with cols[idx]:
-                st.metric(f"MAE {label} (MW)", f"{valeurs['MAE']:.0f}")
-            idx += 1
-
-        for nom, valeurs in metriques.items():
-            label = "Modèle" if nom == "modele" else "RTE"
-            with cols[idx]:
-                st.metric(f"RMSE {label} (MW)", f"{valeurs['RMSE']:.0f}")
-            idx += 1
-
-    else:
-        st.info(
-            "Pas assez de données communes (réel + prévision) pour "
-            "calculer les métriques sur cette période."
-        )
-
-    # --------------------------------------------------------
-    # Graphique
-    # --------------------------------------------------------
-
-    st.markdown("### 📈 Courbes de consommation")
-
-    titre = (
-        f"Prévision vs Réel — "
-        f"du {date_debut.strftime('%d/%m/%Y')} "
-        f"au {date_fin.strftime('%d/%m/%Y')}"
-    )
-
-    fig = graphique_courbes(df, titre)
-
-    st.plotly_chart(fig, use_container_width=True)
-
-    # --------------------------------------------------------
-    # Tableau
-    # --------------------------------------------------------
-
-    with st.expander(" Voir les données détaillées"):
-
-        df_affichage = df.copy()
-
-        df_affichage = df_affichage.rename(columns={
-            "timestamp": "Date/Heure",
-            "modele": "Prévision modèle (MW)",
-            "rte": "Prévision RTE (MW)",
-            "reel": "Consommation réelle (MW)",
-        })
-
-        st.dataframe(
-            df_affichage,
-            use_container_width=True,
-            height=400,
-        )
-
-    # --------------------------------------------------------
-    # Résumé
-    # --------------------------------------------------------
+    with tab2:
+        onglet_carte(periode, date_debut, date_fin)
 
     st.markdown("---")
 
-    col_a, col_b, col_c = st.columns(3)
-
-    with col_a:
-        st.metric("Nombre de points", f"{len(df):,}")
-
-    with col_b:
-        st.metric(
-            "Période",
-            f"{date_debut.strftime('%d/%m')} → {date_fin.strftime('%d/%m')}",
-        )
-
-    with col_c:
-        if st.button("↩️ Changer les dates"):
-            st.session_state["dashboard_actif"] = False
-            st.rerun()
+    if st.button("↩️ Changer les dates"):
+        st.session_state["dashboard_actif"] = False
+        st.rerun()
 
 
 # ============================================================

@@ -41,6 +41,7 @@ results/previsions_regionales.csv
 # ou 08_ensemble_rf_xgboost.py.
 models/*.joblib
 models/*.pkl
+models
 
 # ============================================================
 # Fichiers temporaires

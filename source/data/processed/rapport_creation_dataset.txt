@@ -1,0 +1,43 @@
+RAPPORT DE CRÉATION DU DATASET DE PRÉVISION
+======================================================================
+
+OBJECTIF
+--------
+À 14h du jour J, prévoir les 24 consommations horaires du jour J+1.
+
+VARIABLES EXPLICATIVES
+----------------------
+consommation_j7 : consommation exactement à la même heure de J-7.
+consommation_j1an : consommation exactement à la même heure et à la même date de l'année précédente.
+heure : heure de la journée cible.
+jour_semaine : jour de la semaine de J+1.
+mois : mois de J+1.
+weekend : indicateur samedi/dimanche.
+
+VARIABLE CIBLE
+--------------
+consommation_cible : consommation réellement observée à l'heure correspondante de J+1.
+
+RÈGLES IMPORTANTES
+-------------------
+- aucune moyenne entre demi-heures
+- aucune interpolation
+- aucune valeur artificielle
+- uniquement des observations HH:00
+- J-7 = exactement 7 jours calendaires avant
+- J-1 an = même date de l'année précédente
+- 24 heures exactement pour chaque journée cible
+- aucune prévision RTE utilisée comme variable X
+- aucune donnée de J+1 utilisée dans X
+
+STATISTIQUES
+------------
+Origines testées : 5,398
+Origines conservées : 4,988
+Nombre total de lignes : 119,712
+Cibles incomplètes : 17
+Lags J-7 manquants : 21
+Lags J-1 an manquants : 372
+Ambiguïtés horaires locales : 0
+
+FIN DU RAPPORT

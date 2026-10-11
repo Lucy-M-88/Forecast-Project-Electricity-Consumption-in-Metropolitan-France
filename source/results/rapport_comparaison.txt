@@ -1,0 +1,53 @@
+======================================================================
+COMPARAISON DES SCÉNARIOS MÉTÉO
+======================================================================
+
+Deux scénarios ont été exécutés avec le même pipeline :
+
+  [1] OPÉRATIONNEL
+      Météo observée de J-1 (proxy disponible à 14h le jour J).
+      Scénario déployable en conditions réelles.
+
+  [2] MÉTÉO PARFAITE
+      Météo observée de J+1 (date cible).
+      NON déployable : utilise une information future.
+      Borne supérieure de performance.
+
+======================================================================
+RÉSULTATS GLOBAUX
+======================================================================
+
+                scenario  MAE_test_MW  RMSE_test_MW  MAE_xgb_seul_MW  MAE_rf_seul_MW  alpha_optimal  gain_MAE_vs_op_pct  gain_RMSE_vs_op_pct
+opérationnel (météo J-1)  1831.855794   2549.117952      1848.340057     1876.141216            0.2            0.000000             0.000000
+    météo parfaite (J+1)  1341.276254   1783.519212      1362.360499     1439.280477            0.2           26.780467            30.033869
+
+======================================================================
+DÉTAIL PAR MODÈLE
+======================================================================
+
+      scenario             modele  MAE_test_MW  RMSE_test_MW
+  opérationnel       XGBoost seul  1848.340057   2568.207373
+  opérationnel Random Forest seul  1876.141216   2631.179825
+  opérationnel    Ensemble RF+XGB  1831.855794   2549.117952
+météo_parfaite       XGBoost seul  1362.360499   1813.568242
+météo_parfaite Random Forest seul  1439.280477   1938.252758
+météo_parfaite    Ensemble RF+XGB  1341.276254   1783.519212
+
+======================================================================
+LECTURE
+======================================================================
+
+Le scénario météo parfaite améliore la MAE de +26.78 % et la RMSE de +30.03 % par rapport au scénario opérationnel.
+
+Cet écart quantifie la valeur maximale qu'une météo
+parfaite apporterait. En conditions réelles, il faut
+utiliser une prévision météo de J+1, ce qui donne une
+performance intermédiaire entre les deux bornes.
+
+Rappel : la borne opérationnelle utilise une météo
+observée de J-1 comme proxy de J+1. Elle ne peut pas
+être améliorée sans ajouter d'information météo prévue.
+
+======================================================================
+FIN DU RAPPORT DE COMPARAISON
+======================================================================

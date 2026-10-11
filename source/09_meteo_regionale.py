@@ -190,7 +190,16 @@ def creer_indicateurs(df):
     df = df.copy()
     df = df.sort_values(["code_region", "date"]).reset_index(drop=True)
 
-    def par_region(g):
+    # --------------------------------------------------------
+    # Calcul des indicateurs par région
+    # --------------------------------------------------------
+    # On utilise une boucle explicite plutôt que groupby().apply()
+    # car depuis pandas 2.2, groupby(col).apply() peut supprimer
+    # la colonne de regroupement, ce qui provoque un KeyError.
+
+    frames = []
+
+    for code_region, g in df.groupby("code_region", sort=False):
 
         g = g.sort_values("date").copy()
 
@@ -203,9 +212,16 @@ def creer_indicateurs(df):
         g["HDD_3j"] = g["HDD_moyen"].rolling(3, min_periods=1).mean()
         g["HDD_7j"] = g["HDD_moyen"].rolling(7, min_periods=1).mean()
 
-        return g
+        # On réinjecte explicitement code_region (robustesse)
+        g["code_region"] = code_region
 
-    df = df.groupby("code_region", group_keys=False).apply(par_region)
+        frames.append(g)
+
+    df = pd.concat(frames, ignore_index=True)
+
+    # --------------------------------------------------------
+    # Renommage lisible
+    # --------------------------------------------------------
 
     df = df.rename(columns={
         "TM": "temperature_moyenne",
@@ -221,6 +237,10 @@ def creer_indicateurs(df):
 
     df["nom_region"] = df["code_region"].map(NOM_REGION)
 
+    # --------------------------------------------------------
+    # Ordre final des colonnes
+    # --------------------------------------------------------
+
     cols = [
         "date", "code_region", "nom_region",
         "temperature_moyenne", "temperature_min", "temperature_max",
@@ -233,7 +253,6 @@ def creer_indicateurs(df):
     df = df[[c for c in cols if c in df.columns]].copy()
 
     return df
-
 
 # ============================================================
 # 7. PROGRAMME PRINCIPAL

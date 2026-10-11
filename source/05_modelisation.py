@@ -6,39 +6,51 @@
 Entraînement et évaluation des modèles de prévision de
 consommation électrique.
 
-Ce script effectue deux étapes :
+Deux scénarios sont exécutés avec le même pipeline :
 
-    ÉTAPE 1 : Entraînement du modèle XGBoost seul
-        - Utilise les hyperparamètres optimaux (déjà trouvés).
-        - Entraîne sur le train, évalue sur validation et test.
-        - Sauvegarde le modèle et les métriques.
+    SCÉNARIO 1 — OPÉRATIONNEL
+        Features météo = météo observée de J-1 (proxy).
+        Information strictement disponible à 14h le jour J.
+        Scénario déployable.
 
-    ÉTAPE 2 : Entraînement de l'ensemble RF + XGBoost
-        - Entraîne un Random Forest.
-        - Combine avec le XGBoost (moyenne pondérée).
-        - Optimise alpha sur la validation.
-        - Évalue sur le test.
-        - Sauvegarde le modèle d'ensemble.
+    SCÉNARIO 2 — MÉTÉO PARFAITE (borne supérieure)
+        Features météo = météo observée de J+1 (date cible).
+        NON déployable : utilise une information future.
+        Sert uniquement de borne supérieure de performance
+        pour quantifier l'apport d'une météo parfaite.
 
-L'évaluation produit :
-    - Métriques horaires, journalières, pics.
-    - Erreurs par heure, saison, type de jour.
-    - Pires journées.
-    - Comparaison avec les benchmarks (J-7, J-1 an, moyenne).
+Pour chaque scénario :
+    ÉTAPE 1 : Entraînement du XGBoost seul.
+    ÉTAPE 2 : Entraînement de l'ensemble RF + XGBoost.
+    ÉVALUATION : métriques horaires, journalières, pics,
+                 erreurs par heure/saison/type de jour,
+                 pires journées, comparaison avec benchmarks.
+
+Un fichier de comparaison consolidée est produit à la fin.
 
 Entrée :
     data/processed/dataset_prevision.csv
     data/processed/meteo_france_nationale_journaliere.csv
 
 Sortie :
-    models/modele_xgboost_meteo.joblib
-    models/modele_ensemble_rf_xgb.joblib
-    results/predictions.csv
-    results/importances.csv
-    results/ensemble_ponderation.csv
-    results/evaluation_*.csv
-    results/pires_journees.csv
-    results/rapport.txt
+    models/modele_xgboost_operationnel.joblib
+    models/modele_ensemble_rf_xgb_operationnel.joblib
+    models/modele_xgboost_meteo_parfaite.joblib
+    models/modele_ensemble_rf_xgb_meteo_parfaite.joblib
+    results/predictions_operationnel.csv
+    results/predictions_meteo_parfaite.csv
+    results/importances_operationnel.csv
+    results/importances_meteo_parfaite.csv
+    results/ensemble_ponderation_operationnel.csv
+    results/ensemble_ponderation_meteo_parfaite.csv
+    results/evaluation_*_operationnel.csv
+    results/evaluation_*_meteo_parfaite.csv
+    results/pires_journees_operationnel.csv
+    results/pires_journees_meteo_parfaite.csv
+    results/rapport_operationnel.txt
+    results/rapport_meteo_parfaite.txt
+    results/comparaison_scenarios.csv
+    results/rapport_comparaison.txt
 """
 
 from pathlib import Path
@@ -67,26 +79,33 @@ RESULTS_DIR.mkdir(parents=True, exist_ok=True)
 DATASET_PREVISION = DATA_DIR / "dataset_prevision.csv"
 DATASET_METEO = DATA_DIR / "meteo_france_nationale_journaliere.csv"
 
-MODEL_XGBOOST = MODELS_DIR / "modele_xgboost_meteo.joblib"
-MODEL_ENSEMBLE = MODELS_DIR / "modele_ensemble_rf_xgb.joblib"
+# Suffixes des scénarios
+SUFFIXE_OP = "operationnel"
+SUFFIXE_PARFAITE = "meteo_parfaite"
 
-FICHIER_PREDICTIONS = RESULTS_DIR / "predictions.csv"
-FICHIER_IMPORTANCES = RESULTS_DIR / "importances.csv"
-FICHIER_PONDERATION = RESULTS_DIR / "ensemble_ponderation.csv"
 
-FICHIER_HORAIRE = RESULTS_DIR / "evaluation_horaire.csv"
-FICHIER_JOURNALIER = RESULTS_DIR / "evaluation_journaliere.csv"
-FICHIER_PICS = RESULTS_DIR / "evaluation_pics.csv"
-FICHIER_PAR_HEURE = RESULTS_DIR / "evaluation_par_heure.csv"
-FICHIER_PAR_SAISON = RESULTS_DIR / "evaluation_par_saison.csv"
-FICHIER_PAR_TYPE_JOUR = RESULTS_DIR / "evaluation_par_type_jour.csv"
-FICHIER_PIRES_JOURS = RESULTS_DIR / "pires_journees.csv"
+def _chemins_scenario(suffixe: str) -> dict:
+    """Retourne tous les chemins de sortie pour un scénario donné."""
 
-FICHIER_RAPPORT = RESULTS_DIR / "rapport.txt"
+    return {
+        "model_xgb": MODELS_DIR / f"modele_xgboost_{suffixe}.joblib",
+        "model_ensemble": MODELS_DIR / f"modele_ensemble_rf_xgb_{suffixe}.joblib",
+        "predictions": RESULTS_DIR / f"predictions_{suffixe}.csv",
+        "importances": RESULTS_DIR / f"importances_{suffixe}.csv",
+        "ponderations": RESULTS_DIR / f"ensemble_ponderation_{suffixe}.csv",
+        "horaire": RESULTS_DIR / f"evaluation_horaire_{suffixe}.csv",
+        "journalier": RESULTS_DIR / f"evaluation_journalier_{suffixe}.csv",
+        "pics": RESULTS_DIR / f"evaluation_pics_{suffixe}.csv",
+        "par_heure": RESULTS_DIR / f"evaluation_par_heure_{suffixe}.csv",
+        "par_saison": RESULTS_DIR / f"evaluation_par_saison_{suffixe}.csv",
+        "par_type_jour": RESULTS_DIR / f"evaluation_par_type_jour_{suffixe}.csv",
+        "pires_journees": RESULTS_DIR / f"pires_journees_{suffixe}.csv",
+        "rapport": RESULTS_DIR / f"rapport_{suffixe}.txt",
+    }
 
-TRAIN_RATIO = 0.70
-VALIDATION_RATIO = 0.15
-TEST_RATIO = 0.15
+
+FICHIER_COMPARAISON = RESULTS_DIR / "comparaison_scenarios.csv"
+FICHIER_RAPPORT_COMPARAISON = RESULTS_DIR / "rapport_comparaison.txt"
 
 RANDOM_STATE = 42
 
@@ -236,45 +255,81 @@ def charger_donnees():
 
 
 def joindre_meteo(df, meteo):
-    """Joint la météo du jour J au dataset de prévision."""
+    """Construit les deux versions du dataset (opérationnel / parfaite).
 
-    print("\nJointure météo / dataset...")
+    Scénario opérationnel
+    ---------------------
+    Météo observée de J-1 (proxy disponible à 14h le jour J).
+    Aucune information postérieure à 14h n'est utilisée.
+
+    Scénario météo parfaite
+    -----------------------
+    Météo observée de J+1 (date_cible). Information non
+    disponible à 14h → non déployable, mais utile comme
+    borne supérieure de performance.
+
+    Les deux versions partagent les mêmes colonnes de features
+    (mêmes noms, FEATURES inchangé) : seule la date de référence
+    météo change.
+    """
+
+    print("\nConstruction des deux scénarios météo...")
 
     colonnes_meteo = [
         c for c in meteo.columns
         if c not in ["AAAAMMJJ", "date"]
     ]
 
-    df = df.merge(
-        meteo[["date"] + colonnes_meteo],
-        left_on="origine_prevision",
-        right_on="date",
-        how="left"
+    # --------------------------------------------------------
+    # Scénario 1 : opérationnel — météo de J-1
+    # --------------------------------------------------------
+
+    df_op = df.copy()
+    df_op["date_meteo"] = (
+        pd.to_datetime(df_op["origine_prevision"])
+        - pd.Timedelta(days=1)
     )
+    df_op = df_op.merge(
+        meteo[["date"] + colonnes_meteo],
+        left_on="date_meteo",
+        right_on="date",
+        how="left",
+    )
+    df_op = df_op.drop(columns=["date", "date_meteo"])
 
-    df = df.drop(columns=["date"])
+    print(f"  [opérationnel]   {len(df_op):,} lignes "
+          f"(météo de J-1)")
 
-    print(f"  {len(df):,} lignes après jointure")
+    # --------------------------------------------------------
+    # Scénario 2 : météo parfaite — météo de J+1 = date_cible
+    # --------------------------------------------------------
 
-    return df
+    df_parfaite = df.copy()
+    df_parfaite = df_parfaite.merge(
+        meteo[["date"] + colonnes_meteo],
+        left_on="date_cible",
+        right_on="date",
+        how="left",
+    )
+    df_parfaite = df_parfaite.drop(columns=["date"])
+
+    print(f"  [météo parfaite] {len(df_parfaite):,} lignes "
+          f"(météo de J+1)")
+
+    return df_op, df_parfaite
 
 
 def split_chronologique(df):
     """
     Split chronologique de référence (Split 2).
 
-    Configuration retenue après évaluation comparative :
-        Train      : 2012-12-31 -> 2023-12-31 (~11 ans)
+    Configuration retenue :
+        Train      : <= 2023-12-31 (~11 ans)
         Validation : 2024-01-01 -> 2024-12-31 (1 an)
-        Test       : 2025-01-01 -> 2026-12-31 (~1,75 an)
+        Test       : >= 2025-01-01 (~1,75 an)
 
-    Justification :
-        - Train long (11 ans) incluant les régimes pré-COVID,
-          COVID et post-COVID.
-        - Validation complète (1 an, toutes les saisons).
-        - Test long (1,75 an, 2 hivers et 2 étés), ce qui
-          donne une évaluation robuste.
-        - Meilleur compromis MAE / biais / taux pic.
+    Le split est basé uniquement sur origine_prevision :
+    il est donc IDENTIQUE pour les deux scénarios.
     """
 
     df["origine_prevision"] = pd.to_datetime(
@@ -297,7 +352,7 @@ def split_chronologique(df):
         df["origine_prevision"] > date_fin_validation
     ].copy()
 
-    print("\nDÉCOUPAGE CHRONOLOGIQUE (Split 2)")
+    print("\nDÉCOUPAGE CHRONOLOGIQUE")
     print("-" * 70)
     print(
         f"TRAIN      : "
@@ -318,7 +373,6 @@ def split_chronologique(df):
         f"{test['origine_prevision'].nunique():,} jours"
     )
 
-    # Vérifications chronologiques
     assert train["origine_prevision"].max() < validation["origine_prevision"].min(), \
         "Train et validation se chevauchent"
     assert validation["origine_prevision"].max() < test["origine_prevision"].min(), \
@@ -351,14 +405,13 @@ def verifier_features(df):
 # 4. ÉTAPE 1 : ENTRAÎNEMENT DU XGBOOST SEUL
 # ============================================================
 
-def entrainer_xgboost(train, validation, test):
+def entrainer_xgboost(train, validation, test, chemin_modele):
     """Entraîne XGBoost et évalue."""
 
     print("\n" + "=" * 70)
     print("ÉTAPE 1 : ENTRAÎNEMENT DU XGBOOST")
     print("=" * 70)
 
-    # Nettoyage
     train_clean = train.dropna(subset=FEATURES + [CIBLE]).copy()
     validation_clean = validation.dropna(subset=FEATURES + [CIBLE]).copy()
     test_clean = test.dropna(subset=FEATURES + [CIBLE]).copy()
@@ -377,7 +430,6 @@ def entrainer_xgboost(train, validation, test):
     X_test = test_clean[FEATURES]
     y_test = test_clean[CIBLE]
 
-    # Entraînement
     print("\nEntraînement XGBoost (config optimale)...")
 
     modele = XGBRegressor(**XGB_PARAMS)
@@ -391,7 +443,6 @@ def entrainer_xgboost(train, validation, test):
 
     print(f"  Meilleure itération : {modele.best_iteration}")
 
-    # Évaluation
     pred_val = modele.predict(X_val)
     pred_test = modele.predict(X_test)
 
@@ -410,7 +461,6 @@ def entrainer_xgboost(train, validation, test):
     print(f"Test RMSE       : {rmse_test:.2f} MW")
     print(f"Test biais      : {biais_test:+.2f} MW")
 
-    # Importances
     importances = pd.DataFrame({
         "variable": FEATURES,
         "importance_xgb": modele.feature_importances_,
@@ -419,15 +469,8 @@ def entrainer_xgboost(train, validation, test):
     print("\nIMPORTANCE DES VARIABLES (top 10)")
     print(importances.head(10).to_string(index=False))
 
-    # Prédictions
-    predictions = test_clean[
-        ["origine_prevision", "date_cible", "heure_cible", CIBLE]
-    ].copy()
-    predictions["prediction_xgb"] = pred_test
-
-    # Sauvegarde
-    joblib.dump(modele, MODEL_XGBOOST)
-    print(f"\nModèle sauvegardé : {MODEL_XGBOOST}")
+    joblib.dump(modele, chemin_modele)
+    print(f"\nModèle sauvegardé : {chemin_modele}")
 
     return {
         "modele": modele,
@@ -437,7 +480,6 @@ def entrainer_xgboost(train, validation, test):
         "mae_test": mae_test,
         "rmse_test": rmse_test,
         "biais_test": biais_test,
-        "predictions": predictions,
         "X_val": X_val, "y_val": y_val,
         "X_test": X_test, "y_test": y_test,
         "pred_val": pred_val,
@@ -450,14 +492,14 @@ def entrainer_xgboost(train, validation, test):
 # 5. ÉTAPE 2 : ENSEMBLE RF + XGBOOST
 # ============================================================
 
-def entrainer_ensemble(train, validation, resultats_xgb):
+def entrainer_ensemble(train, validation, resultats_xgb,
+                       chemin_modele, chemin_ponderations):
     """Entraîne l'ensemble RF + XGBoost et évalue."""
 
     print("\n" + "=" * 70)
     print("ÉTAPE 2 : ENSEMBLE RF + XGBOOST")
     print("=" * 70)
 
-    # Nettoyage
     train_clean = train.dropna(subset=FEATURES + [CIBLE]).copy()
     validation_clean = validation.dropna(subset=FEATURES + [CIBLE]).copy()
 
@@ -467,11 +509,9 @@ def entrainer_ensemble(train, validation, resultats_xgb):
     X_val = validation_clean[FEATURES]
     y_val = validation_clean[CIBLE]
 
-    # Le test est déjà préparé dans resultats_xgb
     X_test = resultats_xgb["X_test"]
     y_test = resultats_xgb["y_test"]
 
-    # Entraînement Random Forest
     print("\nEntraînement Random Forest...")
 
     rf = RandomForestRegressor(
@@ -485,17 +525,14 @@ def entrainer_ensemble(train, validation, resultats_xgb):
 
     rf.fit(X_train, y_train)
 
-    # XGBoost est déjà entraîné
     xgb = resultats_xgb["modele"]
 
-    # Prédictions
     pred_rf_val = rf.predict(X_val)
     pred_xgb_val = resultats_xgb["pred_val"]
 
     pred_rf_test = rf.predict(X_test)
     pred_xgb_test = resultats_xgb["pred_test"]
 
-    # Optimisation de alpha sur validation
     print("\nOptimisation de alpha (validation)...")
 
     resultats_val = []
@@ -520,7 +557,6 @@ def entrainer_ensemble(train, validation, resultats_xgb):
     print(f"  MAE  : {meilleure['MAE']:.2f} MW")
     print(f"  RMSE : {meilleure['RMSE']:.2f} MW")
 
-    # Évaluation sur test
     print("\nÉvaluation sur test...")
 
     resultats_test = []
@@ -538,7 +574,6 @@ def entrainer_ensemble(train, validation, resultats_xgb):
     df_test = pd.DataFrame(resultats_test)
     print("\n" + df_test.to_string(index=False))
 
-    # Comparaison finale
     mae_xgb = df_test[df_test["alpha"] == 0.0]["MAE"].values[0]
     rmse_xgb = df_test[df_test["alpha"] == 0.0]["RMSE"].values[0]
 
@@ -567,13 +602,11 @@ def entrainer_ensemble(train, validation, resultats_xgb):
     print(f"  MAE  : {gain_mae:+.2f} %")
     print(f"  RMSE : {gain_rmse:+.2f} %")
 
-    # Importances RF (pour compléter le fichier importances)
     importances_rf = pd.DataFrame({
         "variable": FEATURES,
         "importance_rf": rf.feature_importances_,
     })
 
-    # Modèle d'ensemble
     modele_ensemble = {
         "rf": rf,
         "xgb": xgb,
@@ -581,21 +614,20 @@ def entrainer_ensemble(train, validation, resultats_xgb):
         "features": FEATURES,
     }
 
-    joblib.dump(modele_ensemble, MODEL_ENSEMBLE)
-    print(f"\nModèle d'ensemble sauvegardé : {MODEL_ENSEMBLE}")
+    joblib.dump(modele_ensemble, chemin_modele)
+    print(f"\nModèle d'ensemble sauvegardé : {chemin_modele}")
 
-    # Pondération
     df_val["jeu"] = "validation"
     df_test["jeu"] = "test"
     df_complet = pd.concat([df_val, df_test], ignore_index=True)
 
     df_complet.to_csv(
-        FICHIER_PONDERATION,
+        chemin_ponderations,
         sep=";",
         index=False,
         encoding="utf-8",
     )
-    print(f"Tableau des pondérations : {FICHIER_PONDERATION}")
+    print(f"Tableau des pondérations : {chemin_ponderations}")
 
     return {
         "rf": rf,
@@ -616,14 +648,12 @@ def entrainer_ensemble(train, validation, resultats_xgb):
 
 
 # ============================================================
-# 6. ÉVALUATION DÉTAILLÉE (sur le modèle d'ensemble)
+# 6. ÉVALUATION DÉTAILLÉE
 # ============================================================
 
-def evaluer_modele_final(resultats_xgb, resultats_ensemble):
-    """
-    Évalue le modèle d'ensemble sur le test et produit toutes
-    les métriques et analyses.
-    """
+def evaluer_modele_final(resultats_xgb, resultats_ensemble, chemins):
+    """Évalue le modèle d'ensemble sur le test et produit toutes
+    les métriques et analyses."""
 
     print("\n" + "=" * 70)
     print("ÉVALUATION DÉTAILLÉE DU MODÈLE FINAL")
@@ -637,10 +667,8 @@ def evaluer_modele_final(resultats_xgb, resultats_ensemble):
         + (1 - alpha) * resultats_ensemble["pred_xgb_test"]
     )
 
-    # Ajout des prédictions
     test_clean["prediction_avec_meteo"] = pred_ensemble
 
-    # Benchmarks
     test_clean["benchmark_j7"] = test_clean["consommation_j7"]
     test_clean["benchmark_j1an"] = test_clean["consommation_j1an"]
     test_clean["benchmark_moyenne"] = (
@@ -677,7 +705,7 @@ def evaluer_modele_final(resultats_xgb, resultats_ensemble):
     metriques_h = pd.DataFrame(lignes).sort_values("MAE_MW")
     print(metriques_h.to_string(index=False))
 
-    metriques_h.to_csv(FICHIER_HORAIRE, sep=";", index=False)
+    metriques_h.to_csv(chemins["horaire"], sep=";", index=False)
 
     # --------------------------------------------------------
     # 2. Métriques journalières
@@ -709,7 +737,7 @@ def evaluer_modele_final(resultats_xgb, resultats_ensemble):
     metriques_j = pd.DataFrame(lignes).sort_values("MAE_total_MWh")
     print(metriques_j.to_string(index=False))
 
-    metriques_j.to_csv(FICHIER_JOURNALIER, sep=";", index=False)
+    metriques_j.to_csv(chemins["journalier"], sep=";", index=False)
 
     # --------------------------------------------------------
     # 3. Métriques sur les pics
@@ -754,6 +782,7 @@ def evaluer_modele_final(resultats_xgb, resultats_ensemble):
 
     details_pics = pd.DataFrame(lignes)
 
+    metriques_p = None
     if len(details_pics) > 0:
         metriques_p = (
             details_pics.groupby("modele").agg(
@@ -771,7 +800,7 @@ def evaluer_modele_final(resultats_xgb, resultats_ensemble):
         metriques_p = metriques_p.sort_values("MAE_pic_MW")
 
         print(metriques_p.to_string(index=False))
-        metriques_p.to_csv(FICHIER_PICS, sep=";", index=False)
+        metriques_p.to_csv(chemins["pics"], sep=";", index=False)
 
     # --------------------------------------------------------
     # 4. Analyse par heure
@@ -794,7 +823,7 @@ def evaluer_modele_final(resultats_xgb, resultats_ensemble):
     )
 
     print(par_heure.to_string(index=False))
-    par_heure.to_csv(FICHIER_PAR_HEURE, sep=";", index=False)
+    par_heure.to_csv(chemins["par_heure"], sep=";", index=False)
 
     # --------------------------------------------------------
     # 5. Analyse par saison
@@ -815,7 +844,7 @@ def evaluer_modele_final(resultats_xgb, resultats_ensemble):
     )
 
     print(par_saison.to_string(index=False))
-    par_saison.to_csv(FICHIER_PAR_SAISON, sep=";", index=False)
+    par_saison.to_csv(chemins["par_saison"], sep=";", index=False)
 
     # --------------------------------------------------------
     # 6. Analyse par type de jour
@@ -836,7 +865,7 @@ def evaluer_modele_final(resultats_xgb, resultats_ensemble):
     )
 
     print(par_type.to_string(index=False))
-    par_type.to_csv(FICHIER_PAR_TYPE_JOUR, sep=";", index=False)
+    par_type.to_csv(chemins["par_type_jour"], sep=";", index=False)
 
     # --------------------------------------------------------
     # 7. Pires journées
@@ -856,7 +885,6 @@ def evaluer_modele_final(resultats_xgb, resultats_ensemble):
         ).reset_index()
     )
 
-    # Enrichissement météo
     meteo_sub = (
         test_clean[[
             "date_cible", "temperature_moyenne", "temperature_min",
@@ -877,12 +905,12 @@ def evaluer_modele_final(resultats_xgb, resultats_ensemble):
     )
 
     print(pires.to_string(index=False))
-    pires.to_csv(FICHIER_PIRES_JOURS, sep=";", index=False)
+    pires.to_csv(chemins["pires_journees"], sep=";", index=False)
 
     return {
         "metriques_h": metriques_h,
         "metriques_j": metriques_j,
-        "metriques_p": metriques_p if len(details_pics) > 0 else None,
+        "metriques_p": metriques_p,
         "par_heure": par_heure,
         "par_saison": par_saison,
         "par_type": par_type,
@@ -892,103 +920,28 @@ def evaluer_modele_final(resultats_xgb, resultats_ensemble):
 
 
 # ============================================================
-# 7. PROGRAMME PRINCIPAL
+# 7. ÉCRITURE DU RAPPORT D'UN SCÉNARIO
 # ============================================================
 
-def main():
-
-    print()
-    print("=" * 70)
-    print("MODÉLISATION")
-    print("Projet de prévision - France métropolitaine")
-    print("=" * 70)
-
-    # --------------------------------------------------------
-    # Chargement
-    # --------------------------------------------------------
-
-    df, meteo = charger_donnees()
-    df = joindre_meteo(df, meteo)
-    verifier_features(df)
-
-    train, validation, test = split_chronologique(df)
-
-    # --------------------------------------------------------
-    # Étape 1 : XGBoost
-    # --------------------------------------------------------
-
-    resultats_xgb = entrainer_xgboost(train, validation, test)
-
-    # --------------------------------------------------------
-    # Étape 2 : Ensemble
-    # --------------------------------------------------------
-
-    resultats_ensemble = entrainer_ensemble(
-        train, validation, resultats_xgb
-    )
-
-    # --------------------------------------------------------
-    # Évaluation détaillée
-    # --------------------------------------------------------
-
-    resultats_eval = evaluer_modele_final(
-        resultats_xgb, resultats_ensemble
-    )
-
-    # --------------------------------------------------------
-    # Sauvegarde des prédictions et importances
-    # --------------------------------------------------------
-
-    test_clean = resultats_eval["test_clean"]
-
-    # Prédictions
-    predictions = test_clean[[
-        "origine_prevision", "date_cible", "heure_cible",
-        "consommation_cible",
-        "prediction_avec_meteo",
-    ]].copy()
-
-    predictions = predictions.rename(columns={
-        "consommation_cible": "consommation_reelle",
-        "prediction_avec_meteo": "consommation_prevue",
-    })
-
-    predictions.to_csv(
-        FICHIER_PREDICTIONS,
-        sep=";",
-        index=False,
-        encoding="utf-8",
-    )
-
-    print(f"\nPrédictions sauvegardées : {FICHIER_PREDICTIONS}")
-
-    # Importances (fusion XGB + RF)
-    importances = resultats_xgb["importances"].merge(
-        resultats_ensemble["importances_rf"],
-        on="variable",
-        how="left",
-    )
-
-    importances.to_csv(
-        FICHIER_IMPORTANCES,
-        sep=";",
-        index=False,
-        encoding="utf-8",
-    )
-
-    print(f"Importances sauvegardées : {FICHIER_IMPORTANCES}")
-
-    # --------------------------------------------------------
-    # Rapport consolidé
-    # --------------------------------------------------------
-
-    with open(FICHIER_RAPPORT, "w", encoding="utf-8") as f:
+def ecrire_rapport_scenario(
+    chemin_rapport,
+    titre_scenario,
+    description_meteo,
+    resultats_xgb,
+    resultats_ensemble,
+    resultats_eval,
+):
+    with open(chemin_rapport, "w", encoding="utf-8") as f:
 
         f.write("=" * 70 + "\n")
-        f.write("RAPPORT DE MODÉLISATION\n")
+        f.write(f"RAPPORT DE MODÉLISATION — {titre_scenario}\n")
         f.write("=" * 70 + "\n\n")
 
-        # Section 1 : XGBoost
+        f.write("Scénario météo\n")
+        f.write("-" * 70 + "\n")
+        f.write(description_meteo + "\n\n")
+
+        # ---- XGBoost ----
         f.write("=" * 70 + "\n")
         f.write("ÉTAPE 1 : XGBOOST SEUL\n")
         f.write("=" * 70 + "\n\n")
@@ -1009,7 +962,7 @@ def main():
         f.write(f"Test RMSE       : {resultats_xgb['rmse_test']:.2f} MW\n")
         f.write(f"Test biais      : {resultats_xgb['biais_test']:+.2f} MW\n\n")
 
-        # Section 2 : Ensemble
+        # ---- Ensemble ----
         f.write("=" * 70 + "\n")
         f.write("ÉTAPE 2 : ENSEMBLE RF + XGBOOST\n")
         f.write("=" * 70 + "\n\n")
@@ -1035,7 +988,7 @@ def main():
         f.write(f"Gain MAE  : {resultats_ensemble['gain_mae']:+.2f} %\n")
         f.write(f"Gain RMSE : {resultats_ensemble['gain_rmse']:+.2f} %\n\n")
 
-        # Section 3 : Évaluation détaillée
+        # ---- Évaluation détaillée ----
         f.write("=" * 70 + "\n")
         f.write("ÉVALUATION DÉTAILLÉE (modèle d'ensemble)\n")
         f.write("=" * 70 + "\n\n")
@@ -1080,7 +1033,310 @@ def main():
         f.write("FIN DU RAPPORT\n")
         f.write("=" * 70 + "\n")
 
-    print(f"Rapport consolidé : {FICHIER_RAPPORT}")
+
+# ============================================================
+# 8. EXÉCUTION D'UN SCÉNARIO COMPLET
+# ============================================================
+
+def executer_scenario(df, suffixe, titre_scenario, description_meteo):
+
+    print("\n")
+    print("#" * 70)
+    print(f"# SCÉNARIO : {titre_scenario}")
+    print(f"# {description_meteo}")
+    print("#" * 70)
+
+    chemins = _chemins_scenario(suffixe)
+
+    verifier_features(df)
+
+    train, validation, test = split_chronologique(df)
+
+    resultats_xgb = entrainer_xgboost(
+        train, validation, test,
+        chemin_modele=chemins["model_xgb"],
+    )
+
+    resultats_ensemble = entrainer_ensemble(
+        train, validation, resultats_xgb,
+        chemin_modele=chemins["model_ensemble"],
+        chemin_ponderations=chemins["ponderations"],
+    )
+
+    resultats_eval = evaluer_modele_final(
+        resultats_xgb, resultats_ensemble, chemins
+    )
+
+    test_clean = resultats_eval["test_clean"]
+
+    # Prédictions
+    predictions = test_clean[[
+        "origine_prevision", "date_cible", "heure_cible",
+        "consommation_cible",
+        "prediction_avec_meteo",
+    ]].copy()
+
+    predictions = predictions.rename(columns={
+        "consommation_cible": "consommation_reelle",
+        "prediction_avec_meteo": "consommation_prevue",
+    })
+
+    predictions.to_csv(
+        chemins["predictions"],
+        sep=";",
+        index=False,
+        encoding="utf-8",
+    )
+    print(f"\nPrédictions sauvegardées : {chemins['predictions']}")
+
+    # Importances
+    importances = resultats_xgb["importances"].merge(
+        resultats_ensemble["importances_rf"],
+        on="variable",
+        how="left",
+    )
+
+    importances.to_csv(
+        chemins["importances"],
+        sep=";",
+        index=False,
+        encoding="utf-8",
+    )
+    print(f"Importances sauvegardées : {chemins['importances']}")
+
+    # Rapport du scénario
+    ecrire_rapport_scenario(
+        chemin_rapport=chemins["rapport"],
+        titre_scenario=titre_scenario,
+        description_meteo=description_meteo,
+        resultats_xgb=resultats_xgb,
+        resultats_ensemble=resultats_ensemble,
+        resultats_eval=resultats_eval,
+    )
+    print(f"Rapport du scénario : {chemins['rapport']}")
+
+    return {
+        "titre": titre_scenario,
+        "description_meteo": description_meteo,
+        "resultats_xgb": resultats_xgb,
+        "resultats_ensemble": resultats_ensemble,
+        "resultats_eval": resultats_eval,
+        "chemins": chemins,
+    }
+
+
+# ============================================================
+# 9. COMPARAISON DES SCÉNARIOS
+# ============================================================
+
+def comparer_scenarios(res_op, res_parfaite):
+
+    print("\n" + "=" * 70)
+    print("COMPARAISON DES SCÉNARIOS")
+    print("=" * 70)
+
+    # ---- Tableau comparatif global ----
+    lignes = []
+
+    for nom, res in [
+        ("opérationnel (météo J-1)", res_op),
+        ("météo parfaite (J+1)", res_parfaite),
+    ]:
+        ens = res["resultats_ensemble"]
+        lignes.append({
+            "scenario": nom,
+            "MAE_test_MW": ens["mae_ens"],
+            "RMSE_test_MW": ens["rmse_ens"],
+            "MAE_xgb_seul_MW": ens["mae_xgb"],
+            "MAE_rf_seul_MW": ens["mae_rf"],
+            "alpha_optimal": ens["alpha_optimal"],
+        })
+
+    df_comp = pd.DataFrame(lignes)
+
+    # ---- Gains de la météo parfaite vs opérationnel ----
+    mae_op = df_comp.iloc[0]["MAE_test_MW"]
+    mae_parf = df_comp.iloc[1]["MAE_test_MW"]
+    rmse_op = df_comp.iloc[0]["RMSE_test_MW"]
+    rmse_parf = df_comp.iloc[1]["RMSE_test_MW"]
+
+    gain_mae_pct = (mae_op - mae_parf) / mae_op * 100
+    gain_rmse_pct = (rmse_op - rmse_parf) / rmse_op * 100
+
+    df_comp["gain_MAE_vs_op_pct"] = [
+        0.0,
+        gain_mae_pct,
+    ]
+    df_comp["gain_RMSE_vs_op_pct"] = [
+        0.0,
+        gain_rmse_pct,
+    ]
+
+    # ---- Détail par modèle (XGB seul, RF seul, Ensemble) ----
+    lignes_detaillees = []
+    for nom, res in [
+        ("opérationnel", res_op),
+        ("météo_parfaite", res_parfaite),
+    ]:
+        ens = res["resultats_ensemble"]
+        lignes_detaillees.append({
+            "scenario": nom,
+            "modele": "XGBoost seul",
+            "MAE_test_MW": ens["mae_xgb"],
+            "RMSE_test_MW": ens["rmse_xgb"],
+        })
+        lignes_detaillees.append({
+            "scenario": nom,
+            "modele": "Random Forest seul",
+            "MAE_test_MW": ens["mae_rf"],
+            "RMSE_test_MW": ens["rmse_rf"],
+        })
+        lignes_detaillees.append({
+            "scenario": nom,
+            "modele": "Ensemble RF+XGB",
+            "MAE_test_MW": ens["mae_ens"],
+            "RMSE_test_MW": ens["rmse_ens"],
+        })
+
+    df_detail = pd.DataFrame(lignes_detaillees)
+
+    # ---- Sauvegarde ----
+    df_comp.to_csv(FICHIER_COMPARAISON, sep=";", index=False)
+    print(f"\nComparaison globale : {FICHIER_COMPARAISON}")
+
+    df_detail.to_csv(
+        RESULTS_DIR / "comparaison_detaillee.csv",
+        sep=";", index=False,
+    )
+
+    # ---- Affichage console ----
+    print("\n" + df_comp.to_string(index=False))
+    print("\n" + df_detail.to_string(index=False))
+
+    # ---- Rapport comparaison ----
+    with open(FICHIER_RAPPORT_COMPARAISON, "w", encoding="utf-8") as f:
+
+        f.write("=" * 70 + "\n")
+        f.write("COMPARAISON DES SCÉNARIOS MÉTÉO\n")
+        f.write("=" * 70 + "\n\n")
+
+        f.write("Deux scénarios ont été exécutés avec le même pipeline :\n\n")
+
+        f.write(
+            "  [1] OPÉRATIONNEL\n"
+            "      Météo observée de J-1 (proxy disponible à 14h le jour J).\n"
+            "      Scénario déployable en conditions réelles.\n\n"
+        )
+
+        f.write(
+            "  [2] MÉTÉO PARFAITE\n"
+            "      Météo observée de J+1 (date cible).\n"
+            "      NON déployable : utilise une information future.\n"
+            "      Borne supérieure de performance.\n\n"
+        )
+
+        f.write("=" * 70 + "\n")
+        f.write("RÉSULTATS GLOBAUX\n")
+        f.write("=" * 70 + "\n\n")
+
+        f.write(df_comp.to_string(index=False))
+        f.write("\n\n")
+
+        f.write("=" * 70 + "\n")
+        f.write("DÉTAIL PAR MODÈLE\n")
+        f.write("=" * 70 + "\n\n")
+
+        f.write(df_detail.to_string(index=False))
+        f.write("\n\n")
+
+        f.write("=" * 70 + "\n")
+        f.write("LECTURE\n")
+        f.write("=" * 70 + "\n\n")
+
+        f.write(
+            f"Le scénario météo parfaite améliore la MAE de "
+            f"{gain_mae_pct:+.2f} % et la RMSE de "
+            f"{gain_rmse_pct:+.2f} % par rapport au scénario "
+            f"opérationnel.\n\n"
+        )
+
+        f.write(
+            "Cet écart quantifie la valeur maximale qu'une météo\n"
+            "parfaite apporterait. En conditions réelles, il faut\n"
+            "utiliser une prévision météo de J+1, ce qui donne une\n"
+            "performance intermédiaire entre les deux bornes.\n\n"
+        )
+
+        f.write(
+            "Rappel : la borne opérationnelle utilise une météo\n"
+            "observée de J-1 comme proxy de J+1. Elle ne peut pas\n"
+            "être améliorée sans ajouter d'information météo prévue.\n\n"
+        )
+
+        f.write("=" * 70 + "\n")
+        f.write("FIN DU RAPPORT DE COMPARAISON\n")
+        f.write("=" * 70 + "\n")
+
+    print(f"Rapport de comparaison : {FICHIER_RAPPORT_COMPARAISON}")
+
+
+# ============================================================
+# 10. PROGRAMME PRINCIPAL
+# ============================================================
+
+def main():
+
+    print()
+    print("=" * 70)
+    print("MODÉLISATION — DEUX SCÉNARIOS MÉTÉO")
+    print("Projet de prévision - France métropolitaine")
+    print("=" * 70)
+
+    # --------------------------------------------------------
+    # Chargement et préparation
+    # --------------------------------------------------------
+
+    df, meteo = charger_donnees()
+    df_op, df_parfaite = joindre_meteo(df, meteo)
+
+    # --------------------------------------------------------
+    # Scénario 1 : opérationnel
+    # --------------------------------------------------------
+
+    res_op = executer_scenario(
+        df_op,
+        suffixe=SUFFIXE_OP,
+        titre_scenario="OPÉRATIONNEL (météo J-1)",
+        description_meteo=(
+            "Météo observée du jour J-1 utilisée comme proxy "
+            "de la météo attendue de J+1.\n"
+            "Information strictement disponible à 14h le jour J.\n"
+            "Scénario déployable en conditions réelles."
+        ),
+    )
+
+    # --------------------------------------------------------
+    # Scénario 2 : météo parfaite
+    # --------------------------------------------------------
+
+    res_parfaite = executer_scenario(
+        df_parfaite,
+        suffixe=SUFFIXE_PARFAITE,
+        titre_scenario="MÉTÉO PARFAITE (météo observée J+1)",
+        description_meteo=(
+            "Météo observée de J+1 (date cible) utilisée comme "
+            "features.\n"
+            "NON déployable : information non disponible à 14h "
+            "le jour J.\n"
+            "Sert uniquement de borne supérieure de performance."
+        ),
+    )
+
+    # --------------------------------------------------------
+    # Comparaison des scénarios
+    # --------------------------------------------------------
+
+    comparer_scenarios(res_op, res_parfaite)
 
     print()
     print("=" * 70)

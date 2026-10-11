@@ -3,27 +3,45 @@
 """
 run_all.py
 
-Script de lancement automatique du pipeline complet.
+Pipeline complet de prévision de la consommation électrique
+en France métropolitaine.
 
-Structure attendue :
-    projet/
-    |-- run_all.py           <- ce fichier
-    |-- source/              <- contient les scripts .py
-    |-- data/
-    |-- models/
-    +-- results/
+Lance dans l'ordre :
+    01_telechargement.py            Telechargement eCO2mix national
+    02_preparation.py               Preparation horaire
+    03_creation_dataset.py          Dataset supervise
+    04_meteo.py                     Meteo nationale agregee
+    05_modelisation.py              2 scenarios (op + meteo parfaite)
+    06_prevision_operationnelle.py  Prevision J+1 (API Open-Meteo, non bloquant)
+    08_consommation_regionale.py    Conso regionale eCO2mix
+    09_meteo_regionale.py           Meteo regionale agregee
+    12_completer_aura.py            Completion AURA (non bloquant)
+    11_modelisation_regionale.py    12 modeles regionaux
+    07_dashboard.py                 Dashboard Streamlit (a la fin)
 
-Le script consolide automatiquement source/data, source/models
-et source/results vers les dossiers correspondants a la racine,
-via des liens symboliques.
+Note :
+    Le script 10_prevision_regionale.py (fallback rapide utilisant le
+    modele national) n'est PAS inclus : 11_modelisation_regionale.py
+    produit un meilleur resultat et ecrit le meme fichier de sortie.
 
-Utilisation :
+Compatibilite :
+    - Windows 11 (PowerShell / cmd / Git Bash)
+    - macOS (zsh / bash)
+    - Linux (bash)
+
+Usage :
     python run_all.py
+    python run_all.py --no-dashboard
+    python run_all.py --start 5          Reprend a l'etape 5
+    python run_all.py --only 5           Execute uniquement l'etape 5
+    python run_all.py --list             Liste les etapes
+    python run_all.py --yes              Sans confirmation
 """
 
 from __future__ import annotations
 
-import platform
+import argparse
+import os
 import shutil
 import subprocess
 import sys
@@ -32,222 +50,138 @@ from pathlib import Path
 
 
 # ============================================================
-# 1. CONFIGURATION
+# CONFIGURATION
 # ============================================================
 
-BASE_DIR = Path(__file__).resolve().parent
-SOURCE_DIR = BASE_DIR / "source"
-SCRIPTS_DIR = SOURCE_DIR if SOURCE_DIR.exists() else BASE_DIR
-
-DOSSIERS_A_LIER = ["data", "models", "results"]
-
-# Pipeline : (nom_affichage, fichier_python, args_optionnels)
-PIPELINE = [
-    ("01 - Telechargement eCO2mix national",  "01_telechargement.py",         []),
-    ("02 - Preparation nationale",            "02_preparation.py",            []),
-    ("03 - Creation dataset supervise",       "03_creation_dataset.py",       []),
-    ("04 - Meteo nationale",                  "04_meteo.py",                  []),
-    ("05 - Modelisation nationale",           "05_modelisation.py",           []),
-    ("08 - Conso regionale eCO2mix",          "08_consommation_regionale.py", []),
-    ("09 - Meteo regionale",                  "09_meteo_regionale.py",        []),
-    ("12 - Completion AURA",                  "12_completer_aura.py",         []),
-    ("11 - Modelisation regionale",           "11_modelisation_regionale.py", []),
-]
+SCRIPTS_DIR = Path(__file__).resolve().parent
 
 DASHBOARD_SCRIPT = "07_dashboard.py"
 
+# Etapes dont l'echec ne stoppe PAS le pipeline
+ETAPES_NON_BLOQUANTES = {
+    "06_prevision_operationnelle.py",
+    "12_completer_aura.py",
+}
+
+# Pipeline : (nom affiche, nom du script, arguments)
+PIPELINE = [
+    ("Telechargement eCO2mix national",      "01_telechargement.py",           []),
+    ("Preparation des donnees horaires",     "02_preparation.py",              []),
+    ("Creation du dataset de prevision",     "03_creation_dataset.py",         []),
+    ("Preparation de la meteo nationale",    "04_meteo.py",                    []),
+    ("Modelisation nationale (2 scenarios)", "05_modelisation.py",             []),
+    ("Prevision operationnelle J+1 (API)",   "06_prevision_operationnelle.py", []),
+    ("Telechargement conso regionale",       "08_consommation_regionale.py",   []),
+    ("Agregation meteo regionale",           "09_meteo_regionale.py",          []),
+    ("Completion AURA (reconstruit)",        "12_completer_aura.py",           []),
+    ("Modelisation regionale (12 regions)",  "11_modelisation_regionale.py",   []),
+]
+
+DEPENDANCES_PYTHON = [
+    "pandas",
+    "numpy",
+    "requests",
+    "sklearn",
+    "xgboost",
+    "joblib",
+    "streamlit",
+    "plotly",
+    "matplotlib",
+]
+
 
 # ============================================================
-# 2. UTILITAIRES D'AFFICHAGE
+# BANNIERE
 # ============================================================
-
-def print_header(texte: str, char: str = "=", largeur: int = 78):
-    print()
-    print(char * largeur)
-    print(texte)
-    print(char * largeur)
-
 
 def print_banniere():
-
     print()
     print("=" * 78)
-    print(" " * 20 + "PREVISION DE CONSOMMATION ELECTRIQUE")
-    print(" " * 25 + "Lancement complet du pipeline")
+    print(" PIPELINE COMPLET - PREVISION DE CONSOMMATION ELECTRIQUE")
+    print(" France metropolitaine - Master 2 Temporal Data Analysis")
     print("=" * 78)
     print()
-    print(f"Dossier racine : {BASE_DIR}")
-    print(f"Dossier source : {SCRIPTS_DIR}")
-    print()
-    print(f"Etapes prevues ({len(PIPELINE)}) :")
-    for i, (nom, _, _) in enumerate(PIPELINE, 1):
-        print(f"  {i:2d}. {nom}")
-    print(f"  {len(PIPELINE) + 1:2d}. Lancement du Dashboard Streamlit")
+    print(f"Repertoire : {SCRIPTS_DIR}")
+    print(f"Python     : {sys.executable}")
     print()
 
 
 # ============================================================
-# 3. GESTION DES DOSSIERS (fusion + symlink)
+# PREPARATION DE L'ENVIRONNEMENT
 # ============================================================
-
-def creer_symlink(source: Path, cible: Path) -> bool:
-    """
-    Cree un symlink (Unix) ou une jonction (Windows) de
-    source vers cible. Suppose que source n'existe pas.
-    """
-
-    systeme = platform.system()
-
-    try:
-        if systeme == "Windows":
-            subprocess.run(
-                ["cmd", "/c", "mklink", "/J",
-                 str(source), str(cible)],
-                check=True,
-                capture_output=True,
-            )
-        else:
-            source.symlink_to(cible, target_is_directory=True)
-
-        return True
-
-    except Exception as e:
-        print(f"    [ERREUR] Impossible de lier {source.name} -> {cible} : {e}")
-        return False
-
-
-def fusionner_dossiers(source: Path, cible: Path):
-    """
-    Fusionne source dans cible :
-        - si un element existe des deux cotes, celui de cible
-          est conserve (pour ne pas ecraser les donnees brutes
-          de meteofrance, par exemple)
-        - sinon, on deplace l'element de source vers cible
-    """
-
-    for item in source.iterdir():
-
-        dest = cible / item.name
-
-        if dest.exists():
-            if item.is_dir() and not item.is_symlink():
-                # Fusion recursive
-                dest.mkdir(parents=True, exist_ok=True)
-                fusionner_dossiers(item, dest)
-                # La source fille est videe, on la supprime
-                try:
-                    item.rmdir()
-                except OSError:
-                    pass
-            else:
-                # Conflit fichier : on garde celui de cible
-                # (le fichier source est ecrase)
-                try:
-                    if item.is_dir():
-                        shutil.rmtree(item)
-                    else:
-                        item.unlink()
-                except Exception:
-                    pass
-        else:
-            # Pas de conflit, on deplace
-            try:
-                shutil.move(str(item), str(dest))
-            except Exception as e:
-                print(f"    [ATTENTION] Deplacement {item.name} : {e}")
-
-
-def consolider_dossier(dossier: str) -> bool:
-    """
-    Pour un dossier donne (data, models, results) :
-        - Si source/<dossier> est deja un symlink, on ne fait rien
-        - Si source/<dossier> n'existe pas, on cree le symlink
-        - Si source/<dossier> est un vrai dossier, on fusionne
-          son contenu dans <racine>/<dossier> puis on le remplace
-          par un symlink
-    """
-
-    source = SCRIPTS_DIR / dossier
-    cible = BASE_DIR / dossier
-
-    # Cas 1 : deja un symlink
-    if source.is_symlink():
-        try:
-            if source.resolve() == cible.resolve():
-                print(f"  [OK] {dossier}/ -> {cible} (deja lie)")
-                return True
-        except Exception:
-            pass
-        print(f"  [ATTENTION] {dossier}/ est un symlink casse, on le remplace")
-        source.unlink()
-
-    # Cas 2 : source n'existe pas
-    if not source.exists():
-        cible.mkdir(parents=True, exist_ok=True)
-        ok = creer_symlink(source, cible)
-        if ok:
-            print(f"  [OK] {dossier}/ -> {cible} (cree)")
-        return ok
-
-    # Cas 3 : source est un vrai dossier
-    print(f"  [FUSION] {dossier}/ : source est un vrai dossier")
-
-    cible.mkdir(parents=True, exist_ok=True)
-
-    # Sauvegarde du contenu de source dans cible
-    fusionner_dossiers(source, cible)
-
-    # Supprimer le dossier source vide
-    try:
-        source.rmdir()
-    except OSError as e:
-        print(f"    [ATTENTION] Impossible de supprimer {source} : {e}")
-        return False
-
-    # Creer le symlink
-    ok = creer_symlink(source, cible)
-    if ok:
-        print(f"  [OK] {dossier}/ -> {cible} (fusionne + lie)")
-
-    return ok
-
 
 def preparer_liens_symboliques():
+    """
+    Cree les sous-dossiers necessaires puis, si les modeles
+    existent deja (run precedent), cree les alias de modeles.
+    """
+    for sous in ["data", "data/raw", "data/processed",
+                 "models", "results"]:
+        (SCRIPTS_DIR / sous).mkdir(parents=True, exist_ok=True)
 
-    print_header("PREPARATION DES CHEMINS")
+    creer_alias_modeles(silencieux=True)
 
-    if SCRIPTS_DIR == BASE_DIR:
-        print("\n[INFO] Les scripts sont a la racine, aucun lien necessaire.")
-        return True
 
-    print(f"\nConsolidation des dossiers dans {SCRIPTS_DIR} :")
-    print()
+def creer_alias_modeles(silencieux: bool = False):
+    """
+    Cree des alias (symlink ou copie) pour assurer la compatibilite
+    entre les noms de modeles produits par 05_modelisation.py
+    (suffixes _operationnel / _meteo_parfaite) et ceux attendus
+    par 06_prevision_operationnelle.py et 10_prevision_regionale.py.
 
-    tous_ok = True
+    Sur Windows, os.symlink() echoue souvent (necessite admin ou
+    mode developpeur). On bascule alors sur une copie.
+    """
+    models_dir = SCRIPTS_DIR / "models"
 
-    for dossier in DOSSIERS_A_LIER:
-        ok = consolider_dossier(dossier)
-        if not ok:
-            tous_ok = False
+    if not models_dir.exists():
+        return
 
-    if not tous_ok:
-        print()
-        print("[ATTENTION] Certains dossiers n'ont pas pu etre lies.")
-        print("  Tu peux essayer manuellement :")
-        print(f"    1. Deplacer {BASE_DIR}/data vers {SCRIPTS_DIR}/data")
-        print(f"    2. Idem pour models/ et results/")
+    # (nom_cible_ancien, nom_source_nouveau)
+    alias = [
+        ("modele_ensemble_rf_xgb.joblib",
+         "modele_ensemble_rf_xgb_operationnel.joblib"),
+        ("modele_xgboost_meteo.joblib",
+         "modele_xgboost_operationnel.joblib"),
+    ]
 
-    return tous_ok
+    for cible_nom, source_nom in alias:
+
+        cible = models_dir / cible_nom
+        source = models_dir / source_nom
+
+        if cible.exists():
+            continue
+
+        if not source.exists():
+            continue
+
+        # Tentative de symlink (macOS/Linux, ou Windows en mode dev)
+        try:
+            cible.symlink_to(source.name)
+            if not silencieux:
+                print(f"  [symlink] {cible_nom} -> {source_nom}")
+            continue
+        except (OSError, NotImplementedError, AttributeError):
+            pass
+
+        # Fallback : copie (Windows sans privileges)
+        try:
+            shutil.copy2(source, cible)
+            if not silencieux:
+                print(f"  [copy]    {cible_nom} -> {source_nom}")
+        except Exception as e:
+            if not silencieux:
+                print(f"  [WARN]    alias {cible_nom} : {e}")
 
 
 # ============================================================
-# 4. VERIFICATIONS
+# VERIFICATIONS
 # ============================================================
 
 def verifier_python():
-
     version = sys.version_info
-    print(f"\nPython detecte : {sys.version.split()[0]}")
+    print(f"Python detecte : {sys.version.split()[0]}")
 
     if version.major < 3 or (version.major == 3 and version.minor < 9):
         print("[ERREUR] Python 3.9+ requis.")
@@ -260,21 +194,9 @@ def verifier_dependances():
 
     print("\nVerification des dependances...")
 
-    dependances = [
-        "pandas",
-        "numpy",
-        "requests",
-        "sklearn",
-        "xgboost",
-        "joblib",
-        "streamlit",
-        "plotly",
-        "matplotlib",
-    ]
-
     manquantes = []
 
-    for pkg in dependances:
+    for pkg in DEPENDANCES_PYTHON:
         try:
             __import__(pkg)
             print(f"  [OK] {pkg}")
@@ -325,7 +247,7 @@ def verifier_scripts():
 
 
 # ============================================================
-# 5. EXECUTION
+# EXECUTION D'UN SCRIPT
 # ============================================================
 
 def executer_script(nom_etape, script, args, index, total):
@@ -341,10 +263,15 @@ def executer_script(nom_etape, script, args, index, total):
         print(f"[ERREUR] Script introuvable : {chemin_script}")
         return False
 
-    cmd = [sys.executable, str(chemin_script)] + args
+    cmd = [sys.executable, str(chemin_script)] + [str(a) for a in args]
 
-    print(f"Commande : {' '.join(str(c) for c in cmd)}")
+    print(f"Commande : {' '.join(cmd)}")
     print()
+
+    # Force UTF-8 pour le sous-processus (indispensable sur Windows)
+    env = os.environ.copy()
+    env["PYTHONIOENCODING"] = "utf-8"
+    env["PYTHONUTF8"] = "1"
 
     t0 = time.time()
 
@@ -353,6 +280,7 @@ def executer_script(nom_etape, script, args, index, total):
             cmd,
             cwd=str(SCRIPTS_DIR),
             check=False,
+            env=env,
         )
     except KeyboardInterrupt:
         print("\n\n[ATTENTION] Interruption manuelle (Ctrl+C).")
@@ -370,8 +298,19 @@ def executer_script(nom_etape, script, args, index, total):
 
     print()
     print(f"[OK] Termine en {duree:.1f}s")
+
+    # Hook : apres 05_modelisation.py, creer les alias de modeles
+    if script == "05_modelisation.py":
+        print()
+        print("Creation des alias de modeles pour compatibilite...")
+        creer_alias_modeles()
+
     return True
 
+
+# ============================================================
+# DASHBOARD
+# ============================================================
 
 def lancer_dashboard():
 
@@ -397,8 +336,12 @@ def lancer_dashboard():
         str(chemin_dashboard),
     ]
 
+    env = os.environ.copy()
+    env["PYTHONIOENCODING"] = "utf-8"
+    env["PYTHONUTF8"] = "1"
+
     try:
-        subprocess.run(cmd, cwd=str(SCRIPTS_DIR), check=False)
+        subprocess.run(cmd, cwd=str(SCRIPTS_DIR), check=False, env=env)
     except KeyboardInterrupt:
         print("\n\n[ATTENTION] Dashboard arrete.")
     except Exception as e:
@@ -409,10 +352,74 @@ def lancer_dashboard():
 
 
 # ============================================================
-# 6. PROGRAMME PRINCIPAL
+# CLI
+# ============================================================
+
+def parser_arguments():
+
+    parser = argparse.ArgumentParser(
+        description="Pipeline complet de prevision de consommation.",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+
+    parser.add_argument(
+        "--no-dashboard",
+        action="store_true",
+        help="Ne pas lancer le dashboard a la fin.",
+    )
+
+    parser.add_argument(
+        "--start",
+        type=int,
+        default=1,
+        help="Reprendre a l'etape N (1-indexee).",
+    )
+
+    parser.add_argument(
+        "--only",
+        type=int,
+        default=None,
+        help="N'executer que l'etape N (1-indexee).",
+    )
+
+    parser.add_argument(
+        "--yes", "-y",
+        action="store_true",
+        help="Ne pas demander de confirmation.",
+    )
+
+    parser.add_argument(
+        "--list",
+        action="store_true",
+        help="Lister les etapes du pipeline et quitter.",
+    )
+
+    return parser.parse_args()
+
+
+def afficher_liste():
+    print()
+    print("Etapes du pipeline :")
+    print()
+    for i, (nom, script, _) in enumerate(PIPELINE, 1):
+        bloquant = "non bloquant" if script in ETAPES_NON_BLOQUANTES else "bloquant"
+        print(f"  {i:2d}. {nom:<40s} ({script}) [{bloquant}]")
+    print()
+    print(f"  Dashboard final : {DASHBOARD_SCRIPT}")
+    print()
+
+
+# ============================================================
+# PROGRAMME PRINCIPAL
 # ============================================================
 
 def main():
+
+    args = parser_arguments()
+
+    if args.list:
+        afficher_liste()
+        return
 
     print_banniere()
 
@@ -422,46 +429,87 @@ def main():
     verifier_dependances()
     verifier_scripts()
 
+    # ------------------------------------------------
+    # Selection des etapes
+    # ------------------------------------------------
+
+    total = len(PIPELINE)
+
+    if args.only is not None:
+        if not (1 <= args.only <= total):
+            print(f"[ERREUR] --only doit etre entre 1 et {total}.")
+            sys.exit(1)
+        etapes = [(args.only, PIPELINE[args.only - 1])]
+    else:
+        debut = max(1, args.start)
+        if debut > total:
+            print(f"[ERREUR] --start doit etre entre 1 et {total}.")
+            sys.exit(1)
+        etapes = [(i, PIPELINE[i - 1]) for i in range(debut, total + 1)]
+
+    # ------------------------------------------------
+    # Confirmation
+    # ------------------------------------------------
+
     print()
     print("=" * 78)
     print("PRET A LANCER LE PIPELINE")
     print("=" * 78)
+    print()
+    print(f"Nombre d'etapes a executer : {len(etapes)} / {total}")
     print()
     print("[ATTENTION] Le pipeline complet peut prendre 20-60 minutes :")
     print("   - Telechargements eCO2mix (longs la premiere fois)")
     print("   - Entrainements XGBoost + RF (par region)")
     print()
 
-    try:
-        reponse = input("Continuer ? [o/N] ").strip().lower()
-    except (EOFError, KeyboardInterrupt):
-        print("\nAnnule.")
-        return
+    if not args.yes:
+        try:
+            reponse = input("Continuer ? [o/N] ").strip().lower()
+        except (EOFError, KeyboardInterrupt):
+            print("\nAnnule.")
+            return
 
-    if reponse not in ("o", "oui", "y", "yes"):
-        print("Annule.")
-        return
+        if reponse not in ("o", "oui", "y", "yes"):
+            print("Annule.")
+            return
+
+    # ------------------------------------------------
+    # Execution
+    # ------------------------------------------------
 
     t_debut = time.time()
-    total = len(PIPELINE)
 
-    for i, (nom, script, args) in enumerate(PIPELINE, 1):
+    for idx_absolu, (nom, script, args_script) in etapes:
 
-        ok = executer_script(nom, script, args, i, total)
+        ok = executer_script(
+            nom, script, args_script,
+            index=idx_absolu, total=total,
+        )
 
-        if not ok:
+        if ok:
+            continue
+
+        # Echec : verifier si l'etape est non bloquante
+        if script in ETAPES_NON_BLOQUANTES:
             print()
-            print("=" * 78)
-            print(f"[ECHEC] ARRET DU PIPELINE A L'ETAPE {i}/{total}")
-            print("=" * 78)
-            print()
-            print(f"L'etape '{nom}' a echoue.")
-            print()
-            print("Pour corriger :")
-            print(f"  1. Corrige le script {script}")
-            print(f"  2. Relance python run_all.py")
-            print()
-            return
+            print(f"[ATTENTION] L'etape '{nom}' a echoue mais est "
+                  f"non bloquante.")
+            print("On continue avec l'etape suivante.")
+            continue
+
+        print()
+        print("=" * 78)
+        print(f"[ECHEC] ARRET DU PIPELINE A L'ETAPE {idx_absolu}/{total}")
+        print("=" * 78)
+        print()
+        print(f"L'etape '{nom}' a echoue.")
+        print()
+        print("Pour corriger :")
+        print(f"  1. Corrige le script {script}")
+        print(f"  2. Relance : python run_all.py --start {idx_absolu}")
+        print()
+        return
 
     duree_totale = time.time() - t_debut
 
@@ -473,7 +521,8 @@ def main():
     print(f"Duree totale : {duree_totale / 60:.1f} minutes")
     print()
 
-    lancer_dashboard()
+    if not args.no_dashboard:
+        lancer_dashboard()
 
 
 if __name__ == "__main__":

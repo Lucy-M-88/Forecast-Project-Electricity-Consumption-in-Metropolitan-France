@@ -9,10 +9,9 @@ Deux onglets :
     - Courbes nationales
     - Carte régionale interactive
 
-Améliorations :
-    - GeoJSON robuste (fallback par nom)
-    - Debug explicite des régions chargées
-    - Carte en GW
+Deux scénarios météo nationaux :
+    - OPÉRATIONNEL : météo de J-1 (déployable à 14h J)
+    - MÉTÉO PARFAITE : météo de J+1 (borne supérieure)
 
 Lancement :
     streamlit run 07_dashboard.py
@@ -47,7 +46,13 @@ st.set_page_config(
 BASE_DIR = Path(__file__).resolve().parent
 RESULTS_DIR = BASE_DIR / "results"
 
-FICHIER_PREDICTIONS = RESULTS_DIR / "predictions.csv"
+# Deux fichiers de prédictions nationales (scénarios météo)
+FICHIER_PRED_OPERATIONNEL = RESULTS_DIR / "predictions_operationnel.csv"
+FICHIER_PRED_METEO_PARFAITE = RESULTS_DIR / "predictions_meteo_parfaite.csv"
+
+# Fallback : ancien fichier unique (compat ascendante)
+FICHIER_PRED_LEGACY = RESULTS_DIR / "predictions.csv"
+
 FICHIER_PREVISIONS_REG = RESULTS_DIR / "previsions_regionales.csv"
 
 URL_ECO2MIX_CONSOLIDE = (
@@ -126,11 +131,15 @@ COULEURS = {
     "texte":          "#4A2C33",
     "gris_doux":      "#B8A9A0",
     "vert_doux":      "#7A9A7E",
+    "bleu_gris":      "#5C7A8A",
 }
 
-COULEUR_MODELE = COULEURS["bordeaux"]
-COULEUR_RTE = COULEURS["rose"]
-COULEUR_REEL = COULEURS["vert_doux"]
+# Couleurs des courbes nationales
+COULEUR_MODELE_PARFAITE = COULEURS["bordeaux"]       # trait plein épais
+COULEUR_MODELE_OPERATIONNEL = COULEURS["bleu_gris"]  # trait plein médian
+COULEUR_SOMME_REGIONS = COULEURS["bordeaux_clair"]   # trait pointillé
+COULEUR_RTE = COULEURS["rose"]                       # trait tirets
+COULEUR_REEL = COULEURS["vert_doux"]                 # trait plein épais
 
 CARTE_SCALE = [
     [0.00, "#FAF6F0"],
@@ -199,6 +208,14 @@ def injecter_css():
             margin: 12px 0;
             font-size: 0.95rem;
         }}
+        .bandeau-scenario {{
+            background-color: #EEF3F6;
+            border-left: 5px solid {COULEURS['bleu_gris']};
+            border-radius: 6px;
+            padding: 12px 16px;
+            margin: 8px 0;
+            font-size: 0.88rem;
+        }}
         .warning-box {{
             background-color: #FFF3E0;
             border-left: 5px solid #E8A87C;
@@ -220,10 +237,6 @@ def injecter_css():
 
 @st.cache_data(ttl=86400, show_spinner=False)
 def charger_geojson_regions():
-    """
-    Charge le GeoJSON des régions en essayant plusieurs sources
-    et en normalisant tous les codes.
-    """
 
     for url in URLS_GEOJSON:
 
@@ -237,14 +250,12 @@ def charger_geojson_regions():
 
                 props = f.get("properties", {})
 
-                # Essayer plusieurs clés pour le code
                 code = None
                 for key in ["code", "code_insee", "insee", "region_code"]:
                     if key in props:
                         code = props[key]
                         break
 
-                # Fallback : déduire depuis le nom
                 if code is None or normalize_code(code) not in REGIONS_METROPOLE:
                     for key in ["nom", "name", "libelle"]:
                         if key in props:
@@ -260,13 +271,7 @@ def charger_geojson_regions():
                     features_gardees.append(f)
 
             print(f"GeoJSON {url.split('/')[-1]} : "
-                  f"{len(features_gardees)}/{len(gj['features'])} régions")
-
-            codes_trouves = sorted({
-                f["properties"]["code"] for f in features_gardees
-            })
-
-            print(f"  Codes trouvés : {codes_trouves}")
+                  f"{len(features_gardees)}/{len(REGIONS_METROPOLE)} régions")
 
             if len(features_gardees) >= 12:
                 return {"type": "FeatureCollection", "features": features_gardees}
@@ -275,13 +280,76 @@ def charger_geojson_regions():
             print(f"Échec {url} : {e}")
             continue
 
-    st.error("Impossible de charger un GeoJSON contenant les 13 régions.")
+    st.error("Impossible de charger un GeoJSON contenant les 12 régions.")
     return None
 
 
 # ============================================================
 # 6. CHARGEMENTS
 # ============================================================
+
+def _lire_predictions(chemin, suffixe_col):
+    """
+    Lit un fichier de prédictions nationales et retourne un
+    DataFrame avec timestamp | <suffixe_col>.
+    """
+
+    if not chemin.exists():
+        return None
+
+    df = pd.read_csv(chemin, sep=";", low_memory=False)
+
+    if "date_cible" not in df.columns or "heure_cible" not in df.columns:
+        return None
+
+    df["date_cible"] = pd.to_datetime(df["date_cible"], errors="coerce")
+    df["timestamp"] = df["date_cible"] + pd.to_timedelta(df["heure_cible"], unit="h")
+    df = df.dropna(subset=["timestamp"])
+
+    if "consommation_prevue" not in df.columns:
+        return None
+
+    df = df[["timestamp", "consommation_prevue"]].rename(
+        columns={"consommation_prevue": suffixe_col}
+    )
+
+    return df.sort_values("timestamp").reset_index(drop=True)
+
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def charger_predictions_nationales():
+    """
+    Charge les deux scénarios météo nationaux :
+        - predictions_operationnel.csv   -> modele_operationnel
+        - predictions_meteo_parfaite.csv -> modele_parfaite
+
+    Fallback : si seul predictions.csv existe (ancien format),
+    il est utilisé comme scénario "météo parfaite" (modele_parfaite).
+    """
+
+    df_op = _lire_predictions(FICHIER_PRED_OPERATIONNEL, "modele_operationnel")
+    df_parf = _lire_predictions(FICHIER_PRED_METEO_PARFAITE, "modele_parfaite")
+
+    # Fallback legacy
+    if df_op is None and df_parf is None:
+        df_legacy = _lire_predictions(FICHIER_PRED_LEGACY, "modele_parfaite")
+        if df_legacy is not None:
+            return df_legacy
+
+    # Fusion
+    if df_op is not None and df_parf is not None:
+        return df_op.merge(df_parf, on="timestamp", how="outer").sort_values(
+            "timestamp"
+        ).reset_index(drop=True)
+
+    if df_parf is not None:
+        return df_parf
+
+    if df_op is not None:
+        return df_op
+
+    return None
+
 
 @st.cache_data(ttl=3600, show_spinner=False)
 def detecter_periode_autorisee():
@@ -294,40 +362,32 @@ def detecter_periode_autorisee():
         "source": "valeur par défaut",
     }
 
-    if FICHIER_PREDICTIONS.exists():
-        try:
-            df = pd.read_csv(
-                FICHIER_PREDICTIONS, sep=";",
-                usecols=["date_cible"], low_memory=False
-            )
-            df["date_cible"] = pd.to_datetime(df["date_cible"], errors="coerce")
-            df = df.dropna(subset=["date_cible"])
-            if len(df) > 0:
-                info["date_min"] = df["date_cible"].min().normalize()
-                info["source"] = "déduite de predictions.csv (test)"
-        except Exception:
-            pass
+    # On cherche la date min parmi les fichiers disponibles
+    dates_min = []
+
+    for chemin in [FICHIER_PRED_OPERATIONNEL,
+                   FICHIER_PRED_METEO_PARFAITE,
+                   FICHIER_PRED_LEGACY]:
+        if chemin.exists():
+            try:
+                df = pd.read_csv(
+                    chemin, sep=";", low_memory=False,
+                    usecols=["date_cible"],
+                )
+                df["date_cible"] = pd.to_datetime(
+                    df["date_cible"], errors="coerce"
+                )
+                df = df.dropna(subset=["date_cible"])
+                if len(df) > 0:
+                    dates_min.append(df["date_cible"].min().normalize())
+            except Exception:
+                pass
+
+    if dates_min:
+        info["date_min"] = min(dates_min)
+        info["source"] = "déduite des fichiers de prédictions (test)"
 
     return info
-
-
-@st.cache_data(ttl=3600, show_spinner=False)
-def charger_predictions_nationales():
-
-    if not FICHIER_PREDICTIONS.exists():
-        return None
-
-    df = pd.read_csv(FICHIER_PREDICTIONS, sep=";", low_memory=False)
-    df["date_cible"] = pd.to_datetime(df["date_cible"], errors="coerce")
-    df["timestamp"] = df["date_cible"] + pd.to_timedelta(df["heure_cible"], unit="h")
-    df = df.dropna(subset=["timestamp"])
-
-    cols = ["timestamp"]
-    for c in ["consommation_reelle", "consommation_prevue"]:
-        if c in df.columns:
-            cols.append(c)
-
-    return df[cols].sort_values("timestamp").reset_index(drop=True)
 
 
 @st.cache_data(ttl=3600, show_spinner=False)
@@ -418,26 +478,42 @@ def charger_eco2mix_national(date_debut, date_fin):
 # ============================================================
 
 def graphique_courbes_nationales(df, titre):
+    """
+    5 courbes possibles :
+        - Modèle national météo parfaite (bordeaux épais)
+        - Modèle national opérationnel (bleu-gris épais)
+        - Somme des modèles régionaux (bordeaux clair pointillé)
+        - Prévision RTE J-1 (rose tirets)
+        - Consommation réelle éCO2mix (vert doux épais)
+    """
 
     fig = go.Figure()
 
-    # 1. Modèle national
-    if "modele" in df.columns and df["modele"].notna().any():
+    # 1. Modèle national — météo parfaite
+    if "modele_parfaite" in df.columns and df["modele_parfaite"].notna().any():
         fig.add_trace(go.Scatter(
-            x=df["timestamp"], y=df["modele"], mode="lines",
-            name="Prévision modèle national",
-            line=dict(color=COULEUR_MODELE, width=2.5),
+            x=df["timestamp"], y=df["modele_parfaite"], mode="lines",
+            name="Modèle national — météo parfaite (J+1)",
+            line=dict(color=COULEUR_MODELE_PARFAITE, width=2.5),
         ))
 
-    # 2. Somme des modèles régionaux
+    # 2. Modèle national — opérationnel
+    if "modele_operationnel" in df.columns and df["modele_operationnel"].notna().any():
+        fig.add_trace(go.Scatter(
+            x=df["timestamp"], y=df["modele_operationnel"], mode="lines",
+            name="Modèle national — opérationnel (météo J-1)",
+            line=dict(color=COULEUR_MODELE_OPERATIONNEL, width=2.2),
+        ))
+
+    # 3. Somme des modèles régionaux
     if "somme_regions" in df.columns and df["somme_regions"].notna().any():
         fig.add_trace(go.Scatter(
             x=df["timestamp"], y=df["somme_regions"], mode="lines",
             name="Somme modèles régionaux",
-            line=dict(color=COULEURS["bordeaux_clair"], width=2, dash="dot"),
+            line=dict(color=COULEUR_SOMME_REGIONS, width=2, dash="dot"),
         ))
 
-    # 3. RTE
+    # 4. Prévision RTE J-1
     if "rte" in df.columns and df["rte"].notna().any():
         fig.add_trace(go.Scatter(
             x=df["timestamp"], y=df["rte"], mode="lines",
@@ -445,7 +521,7 @@ def graphique_courbes_nationales(df, titre):
             line=dict(color=COULEUR_RTE, width=2, dash="dash"),
         ))
 
-    # 4. Réel
+    # 5. Consommation réelle
     if "reel" in df.columns and df["reel"].notna().any():
         fig.add_trace(go.Scatter(
             x=df["timestamp"], y=df["reel"], mode="lines",
@@ -470,10 +546,11 @@ def graphique_courbes_nationales(df, titre):
         ),
         xaxis=dict(gridcolor=COULEURS["rose_clair"]),
         yaxis=dict(gridcolor=COULEURS["rose_clair"]),
-        height=520,
-        margin=dict(l=40, r=40, t=80, b=40),
+        height=560,
+        margin=dict(l=40, r=40, t=100, b=40),
     )
     return fig
+
 
 def graphique_courbes_regionale(df_region, nom_region, titre):
 
@@ -483,7 +560,7 @@ def graphique_courbes_regionale(df_region, nom_region, titre):
         fig.add_trace(go.Scatter(
             x=df_region["timestamp"], y=df_region["consommation_prevue"],
             mode="lines", name="Prévision modèle régional",
-            line=dict(color=COULEUR_MODELE, width=2.5),
+            line=dict(color=COULEUR_MODELE_PARFAITE, width=2.5),
         ))
 
     if "consommation_reelle" in df_region.columns:
@@ -621,66 +698,66 @@ def onglet_national(periode, date_debut, date_fin):
 
     st.markdown("### 📈 Courbes de consommation nationale")
 
+    # --------------------------------------------------------
+    # Bandeau explicatif sur les scénarios
+    # --------------------------------------------------------
+
+    st.markdown(
+        f"""
+        <div class="bandeau-scenario">
+            <b>Deux scénarios météo comparés :</b><br>
+            • <b>Opérationnel</b> (bleu) : utilise la météo observée de J-1
+            comme proxy. <i>Déployable à 14h le jour J.</i><br>
+            • <b>Météo parfaite</b> (bordeaux) : utilise la météo observée
+            de J+1. <i>Non déployable</i> — borne supérieure de performance.
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    # --------------------------------------------------------
+    # Chargement des sources
+    # --------------------------------------------------------
+
     df_modele = charger_predictions_nationales()
     df_rte = charger_eco2mix_national(date_debut.isoformat(), date_fin.isoformat())
     df_reg = charger_previsions_regionales()
 
     frames = []
 
-    # --------------------------------------------------------
-    # Modèle national
-    # --------------------------------------------------------
-
-    if (
-        df_modele is not None
-        and len(df_modele) > 0
-        and "consommation_prevue" in df_modele.columns
-    ):
-        tmp = df_modele[["timestamp", "consommation_prevue"]].rename(
-            columns={"consommation_prevue": "modele"}
-        )
-        frames.append(tmp)
-
-    # --------------------------------------------------------
-    # RTE + réel
-    # --------------------------------------------------------
+    if df_modele is not None and len(df_modele) > 0:
+        frames.append(df_modele)
 
     if df_rte is not None and len(df_rte) > 0:
         frames.append(df_rte)
-
-    # --------------------------------------------------------
-    # Fusion principale
-    # --------------------------------------------------------
 
     if not frames:
         st.warning("Aucune donnée nationale disponible.")
         return
 
     df = pd.concat(frames, ignore_index=True)
-    for c in ["modele", "rte", "reel"]:
+
+    # Colonnes attendues
+    for c in ["modele_parfaite", "modele_operationnel", "rte", "reel"]:
         if c not in df.columns:
             df[c] = np.nan
 
-    df = df.groupby("timestamp", as_index=False).agg(
-        {c: "mean" for c in ["modele", "rte", "reel"]}
-    )
+    df = df.groupby("timestamp", as_index=False).agg({
+        "modele_parfaite": "mean",
+        "modele_operationnel": "mean",
+        "rte": "mean",
+        "reel": "mean",
+    })
 
     # --------------------------------------------------------
     # Somme des modèles régionaux
-    # --------------------------------------------------------
-    # Pour chaque timestamp, on somme les prévisions de toutes
-    # les régions. On n'inclut que les timestamps où TOUTES les
-    # régions ont une prévision (sinon la somme est biaisée).
     # --------------------------------------------------------
 
     if df_reg is not None and len(df_reg) > 0:
 
         df_reg_clean = df_reg.dropna(subset=["consommation_prevue"])
-
-        # Nombre total de régions
         nb_regions_total = df_reg_clean["code_region"].nunique()
 
-        # Somme par timestamp + comptage du nombre de régions
         somme_reg = (
             df_reg_clean
             .groupby("timestamp")["consommation_prevue"]
@@ -689,8 +766,6 @@ def onglet_national(periode, date_debut, date_fin):
             .rename(columns={"sum": "somme_regions", "count": "nb_regions"})
         )
 
-        # On ne garde que les timestamps où toutes les régions
-        # ont une prévision
         somme_reg = somme_reg[
             somme_reg["nb_regions"] == nb_regions_total
         ].copy()
@@ -720,39 +795,44 @@ def onglet_national(periode, date_debut, date_fin):
         return
 
     # --------------------------------------------------------
-    # Métriques : modèle national, RTE, somme régions
+    # Métriques
     # --------------------------------------------------------
 
     reel = df["reel"]
 
+    # 5 cibles, ordre d'affichage
     cibles = [
-        ("modele", "Modèle national"),
-        ("rte", "RTE"),
+        ("modele_parfaite", "Modèle (météo parfaite)"),
+        ("modele_operationnel", "Modèle (opérationnel)"),
         ("somme_regions", "Somme régions"),
+        ("rte", "RTE J-1"),
     ]
 
-    cols = st.columns(len(cibles) * 2)
-    idx = 0
-
-    for col_name, label in cibles:
-
+    # Ligne 1 : MAE
+    st.markdown("**MAE (MW)**")
+    cols = st.columns(len(cibles))
+    for i, (col_name, label) in enumerate(cibles):
         if col_name not in df.columns:
             continue
-
         m = df[col_name].notna() & reel.notna()
-
         if m.sum() == 0:
             continue
-
         err = df.loc[m, col_name] - reel[m]
+        with cols[i]:
+            st.metric(label, f"{np.mean(np.abs(err)):.0f}")
 
-        with cols[idx]:
-            st.metric(f"MAE {label} (MW)", f"{np.mean(np.abs(err)):.0f}")
-        idx += 1
-
-        with cols[idx]:
-            st.metric(f"RMSE {label} (MW)", f"{np.sqrt(np.mean(err**2)):.0f}")
-        idx += 1
+    # Ligne 2 : RMSE
+    st.markdown("**RMSE (MW)**")
+    cols = st.columns(len(cibles))
+    for i, (col_name, label) in enumerate(cibles):
+        if col_name not in df.columns:
+            continue
+        m = df[col_name].notna() & reel.notna()
+        if m.sum() == 0:
+            continue
+        err = df.loc[m, col_name] - reel[m]
+        with cols[i]:
+            st.metric(label, f"{np.sqrt(np.mean(err**2)):.0f}")
 
     # --------------------------------------------------------
     # Graphique
@@ -763,6 +843,7 @@ def onglet_national(periode, date_debut, date_fin):
         f"Prévision vs Réel — du {date_debut.strftime('%d/%m/%Y')} au {date_fin.strftime('%d/%m/%Y')}",
     )
     st.plotly_chart(fig, use_container_width=True)
+
 
 # ============================================================
 # 10. ONGLET CARTE
@@ -791,40 +872,20 @@ def onglet_carte(periode, date_debut, date_fin):
     df = df_reg.copy()
     df["nom_region"] = df["code_region"].map(REGIONS_METROPOLE)
 
-    # --------------------------------------------------------
     # Diagnostic
-    # --------------------------------------------------------
-
     with st.expander("🔍 Diagnostic régional", expanded=False):
-
         codes_presents = sorted(df["code_region"].unique())
         codes_attendus = sorted(REGIONS_METROPOLE.keys())
-
-        st.write(
-            f"**Régions attendues ({len(codes_attendus)})** : "
-            f"{', '.join(codes_attendus)}"
-        )
-        st.write(
-            f"**Régions dans les données ({len(codes_presents)})** : "
-            f"{', '.join(codes_presents)}"
-        )
-
+        st.write(f"**Régions attendues ({len(codes_attendus)})** : "
+                 f"{', '.join(codes_attendus)}")
+        st.write(f"**Régions dans les données ({len(codes_presents)})** : "
+                 f"{', '.join(codes_presents)}")
         manquantes = set(codes_attendus) - set(codes_presents)
-
         if manquantes:
-            st.error(
-                f"⚠ Régions manquantes dans previsions_regionales.csv : "
-                f"{sorted(manquantes)}"
-            )
+            st.error(f"⚠ Régions manquantes : {sorted(manquantes)}")
+        st.write(f"**Période** : {df['timestamp'].min()} → {df['timestamp'].max()}")
 
-        st.write(
-            f"**Période** : {df['timestamp'].min()} → {df['timestamp'].max()}"
-        )
-
-    # --------------------------------------------------------
     # Filtre date
-    # --------------------------------------------------------
-
     d_debut = pd.Timestamp(date_debut)
     d_fin = pd.Timestamp(date_fin) + pd.Timedelta(days=1) - pd.Timedelta(seconds=1)
 
@@ -836,38 +897,22 @@ def onglet_carte(periode, date_debut, date_fin):
         st.warning("Pas de données régionales sur cette période.")
         return
 
-    # ========================================================
-    # PERFORMANCES PAR RÉGION (sur la période affichée)
-    # ========================================================
-    # MEILLEUR = MAE la plus faible
-    # PIRE = MAE la plus élevée
-    # ========================================================
-
+    # Performance par région
     perf_rows = []
 
     for code_region in sorted(df_periode["code_region"].unique()):
-
         sub = df_periode[df_periode["code_region"] == code_region].copy()
-
         m = (
             sub["consommation_prevue"].notna()
             & sub["consommation_reelle"].notna()
         )
-
         if m.sum() == 0:
             continue
 
-        err = (
-            sub.loc[m, "consommation_prevue"]
-            - sub.loc[m, "consommation_reelle"]
-        )
-
+        err = sub.loc[m, "consommation_prevue"] - sub.loc[m, "consommation_reelle"]
         mae = float(np.mean(np.abs(err)))
         rmse = float(np.sqrt(np.mean(err ** 2)))
         biais = float(np.mean(err))
-
-        # MAE en % de la conso moyenne (pour comparaison entre régions
-        # de tailles très différentes)
         conso_moy = float(sub.loc[m, "consommation_reelle"].mean())
         mae_pct = (mae / conso_moy * 100) if conso_moy > 0 else np.nan
 
@@ -883,12 +928,8 @@ def onglet_carte(periode, date_debut, date_fin):
 
     df_perf = pd.DataFrame(perf_rows)
 
-    # --------------------------------------------------------
-    # Choix valeur affichée sur la carte
-    # --------------------------------------------------------
-
+    # Choix valeur
     col1, col2 = st.columns([1, 3])
-
     with col1:
         type_valeur = st.selectbox(
             "Valeur affichée",
@@ -901,10 +942,7 @@ def onglet_carte(periode, date_debut, date_fin):
         else "consommation_reelle"
     )
 
-    # --------------------------------------------------------
     # Slider temporel
-    # --------------------------------------------------------
-
     timestamps_dispo = sorted(df_periode["timestamp"].unique())
 
     if len(timestamps_dispo) == 0:
@@ -926,10 +964,6 @@ def onglet_carte(periode, date_debut, date_fin):
 
     ts_selectionne = pd.Timestamp(ts_selectionne)
 
-    # --------------------------------------------------------
-    # Snapshot
-    # --------------------------------------------------------
-
     df_snap = df_periode[df_periode["timestamp"] == ts_selectionne].copy()
 
     if df_snap.empty:
@@ -940,15 +974,7 @@ def onglet_carte(periode, date_debut, date_fin):
 
     df_snap["valeur_gw"] = df_snap[colonne] / 1000.0
 
-    # ========================================================
-    # LAYOUT
-    # ========================================================
-
     col_g, col_d = st.columns([1, 1])
-
-    # --------------------------------------------------------
-    # COLONNE GAUCHE : carte + top/flop performance
-    # --------------------------------------------------------
 
     with col_g:
 
@@ -977,16 +1003,12 @@ def onglet_carte(periode, date_debut, date_fin):
                 noms = [REGIONS_METROPOLE[c] for c in sorted(manquants_snap)]
                 st.markdown(
                     f'<div class="warning-box">'
-                    f'⚠ Régions sans données à ce timestamp : '
-                    f'{", ".join(noms)}'
+                    f'⚠ Régions sans données : {", ".join(noms)}'
                     f'</div>',
                     unsafe_allow_html=True,
                 )
 
-        # ----------------------------------------------------
-        # TOP / FLOP PAR PERFORMANCE DU MODÈLE
-        # ----------------------------------------------------
-
+        # Top / flop performance
         if not df_perf.empty:
 
             st.markdown("---")
@@ -996,13 +1018,11 @@ def onglet_carte(periode, date_debut, date_fin):
                 f"{date_fin.strftime('%d/%m/%Y')})**"
             )
 
-            # On trie par MAE en % (équité entre régions de tailles
-            # différentes) puis on affiche la MAE en MW
             df_perf_tri = df_perf.dropna(subset=["MAE_pct"]).copy()
             df_perf_tri = df_perf_tri.sort_values("MAE_pct")
 
             meilleures = df_perf_tri.head(5)
-            pires = df_perf_tri.tail(5).iloc[::-1]  # plus pire en haut
+            pires = df_perf_tri.tail(5).iloc[::-1]
 
             c1, c2 = st.columns(2)
 
@@ -1024,9 +1044,7 @@ def onglet_carte(periode, date_debut, date_fin):
                         f"({r['MAE_pct']:.2f} %)"
                     )
 
-            # Tableau détaillé
             with st.expander("📊 Tableau complet des performances"):
-
                 df_affichage = df_perf.copy()
                 df_affichage = df_affichage.rename(columns={
                     "code_region": "Code",
@@ -1038,16 +1056,7 @@ def onglet_carte(periode, date_debut, date_fin):
                     "n": "n_heures",
                 })
                 df_affichage = df_affichage.sort_values("MAE (%)")
-
-                st.dataframe(
-                    df_affichage,
-                    use_container_width=True,
-                    height=400,
-                )
-
-    # --------------------------------------------------------
-    # COLONNE DROITE : détail région
-    # --------------------------------------------------------
+                st.dataframe(df_affichage, use_container_width=True, height=400)
 
     with col_d:
 
@@ -1076,31 +1085,19 @@ def onglet_carte(periode, date_debut, date_fin):
             )
             st.plotly_chart(fig, use_container_width=True)
 
-            # Performance de cette région
             code_region_sel = df_reg_sel["code_region"].iloc[0]
-
-            perf_sel = df_perf[
-                df_perf["code_region"] == code_region_sel
-            ]
+            perf_sel = df_perf[df_perf["code_region"] == code_region_sel]
 
             if not perf_sel.empty:
                 row = perf_sel.iloc[0]
                 c1, c2, c3 = st.columns(3)
                 with c1:
-                    st.metric(
-                        "MAE (MW)",
-                        f"{row['MAE_MW']:.0f}",
-                    )
+                    st.metric("MAE (MW)", f"{row['MAE_MW']:.0f}")
                 with c2:
-                    st.metric(
-                        "MAE (%)",
-                        f"{row['MAE_pct']:.2f} %",
-                    )
+                    st.metric("MAE (%)", f"{row['MAE_pct']:.2f} %")
                 with c3:
-                    st.metric(
-                        "Biais (MW)",
-                        f"{row['biais_MW']:+.0f}",
-                    )
+                    st.metric("Biais (MW)", f"{row['biais_MW']:+.0f}".replace("mW", "MW"))
+
 
 # ============================================================
 # 11. PAGE DASHBOARD

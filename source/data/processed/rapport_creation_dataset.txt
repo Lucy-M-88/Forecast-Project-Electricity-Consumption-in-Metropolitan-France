@@ -32,10 +32,10 @@ RÈGLES IMPORTANTES
 
 STATISTIQUES
 ------------
-Origines testées : 5,398
+Origines testées : 5,399
 Origines conservées : 4,988
 Nombre total de lignes : 119,712
-Cibles incomplètes : 17
+Cibles incomplètes : 18
 Lags J-7 manquants : 21
 Lags J-1 an manquants : 372
 Ambiguïtés horaires locales : 0
